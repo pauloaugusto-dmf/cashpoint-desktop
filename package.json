@@ -1,0 +1,60 @@
+{
+  "name": "cashpoint-desktop",
+  "version": "1.0.0",
+  "description": "Gerenciador financeiro pessoal para desktop",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env NODE_ENV=development concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "build": "vite build",
+    "build:win": "vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.cashpoint.desktop",
+    "productName": "Cashpoint",
+    "directories": {
+      "output": "release/"
+    },
+    "files": [
+      "dist/renderer/**/*",
+      "src/main/**/*",
+      "src/preload/**/*",
+      "src/assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src/assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "installerIcon": "src/assets/icon.ico",
+      "uninstallerIcon": "src/assets/icon.ico",
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "dependencies": {
+    "lucide-react": "^0.378.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sonner": "^2.0.7",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "41.4.0",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "vite": "^5.2.11",
+    "wait-on": "^7.2.0"
+  }
+}

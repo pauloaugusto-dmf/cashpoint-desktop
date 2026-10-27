@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary-500: 16 185 129; /* Emerald 500 */
+  --primary-600: 5 150 105; /* Emerald 600 */
+
+  --bg-900: 18 18 18;
+  --bg-800: 28 28 28;
+  --bg-700: 38 38 38;
+  --bg-600: 50 50 50;
+  --text-main: 243 244 246;
+  --text-muted: 156 163 175;
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-dark-800/80 backdrop-blur-md border border-white/5;
+  }
+}
+
+/* Frameless Window Drag */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}

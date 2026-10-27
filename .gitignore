@@ -1,0 +1,40 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Node Modules & Builds
+node_modules
+dist
+dist-ssr
+out/
+build/
+release/
+
+# Electron Build outputs
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# Local test databases
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite.bak
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+.DS_Store
+
+# Env
+.env
+.env.*
+!.env.example
