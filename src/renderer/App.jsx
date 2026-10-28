@@ -4,6 +4,7 @@ import {
   CreditCard,
   TrendingDown,
   Plus,
+  Pencil,
   CheckCircle2,
   Circle,
   Trash2,
@@ -33,6 +34,24 @@ const formatBRL = (cents) => {
   }).format((cents || 0) / 100);
 };
 
+// Helper de conversão de input em BRL para centavos
+const parseBRLInputToCents = (val) => {
+  if (typeof val === 'number') return Math.round(val * 100);
+  if (!val) return 0;
+  let str = String(val).trim();
+  const isNegative = str.includes('-');
+  str = str.replace(/[^0-9,\.]/g, '');
+  if (!str) return 0;
+  if (str.includes('.') && str.includes(',')) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  } else if (str.includes(',')) {
+    str = str.replace(',', '.');
+  }
+  const num = parseFloat(str);
+  if (isNaN(num)) return 0;
+  return Math.round((isNegative ? -num : num) * 100);
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [expenseFilter, setExpenseFilter] = useState('all'); // 'all' | 'recurring' | 'installment' | 'one_time'
@@ -49,6 +68,10 @@ export default function App() {
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showCardModal, setShowCardModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
+
+  // Estados de Edição
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [editingCard, setEditingCard] = useState(null);
 
   // Forms
   const [accountForm, setAccountForm] = useState({ name: '', balance_reais: '' });
@@ -222,16 +245,56 @@ export default function App() {
   }, [monthExpenses, expenseFilter]);
 
   // Ações de Contas
-  const handleCreateAccount = async (e) => {
+  const handleOpenAddAccount = () => {
+    setEditingAccount(null);
+    setAccountForm({ name: '', balance_reais: '' });
+    setShowAccountModal(true);
+  };
+
+  const handleOpenEditAccount = (acc) => {
+    setEditingAccount(acc);
+    const reais = ((acc.balance_cents || 0) / 100).toFixed(2).replace('.', ',');
+    setAccountForm({
+      name: acc.name,
+      balance_reais: reais
+    });
+    setShowAccountModal(true);
+  };
+
+  const handleSaveAccount = async (e) => {
     e.preventDefault();
-    if (!accountForm.name) return;
-    const balance_cents = Math.round(parseFloat(accountForm.balance_reais.replace(',', '.') || 0) * 100);
+    if (!accountForm.name?.trim()) return;
+    const balance_cents = parseBRLInputToCents(accountForm.balance_reais);
     try {
-      if (window.api?.addAccount) {
-        await window.api.addAccount({ name: accountForm.name, balance_cents });
+      if (editingAccount) {
+        if (window.api?.updateAccount) {
+          await window.api.updateAccount(editingAccount.id, {
+            name: accountForm.name.trim(),
+            balance_cents
+          });
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            accounts: prev.accounts.map(a => a.id === editingAccount.id ? { ...a, name: accountForm.name.trim(), balance_cents } : a)
+          }));
+        }
+        toast.success('Conta atualizada com sucesso');
+      } else {
+        if (window.api?.addAccount) {
+          await window.api.addAccount({
+            name: accountForm.name.trim(),
+            balance_cents
+          });
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            accounts: [...prev.accounts, { id: Date.now(), name: accountForm.name.trim(), balance_cents }]
+          }));
+        }
+        toast.success('Conta criada com sucesso');
       }
-      toast.success('Conta criada com sucesso');
       setShowAccountModal(false);
+      setEditingAccount(null);
       setAccountForm({ name: '', balance_reais: '' });
       loadData();
     } catch (err) {
@@ -244,6 +307,11 @@ export default function App() {
     try {
       if (window.api?.deleteAccount) {
         await window.api.deleteAccount(id);
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          accounts: prev.accounts.filter(a => a.id !== id)
+        }));
       }
       toast.success('Conta removida');
       loadData();
@@ -253,21 +321,74 @@ export default function App() {
   };
 
   // Ações de Cartões
-  const handleCreateCard = async (e) => {
+  const handleOpenAddCard = () => {
+    setEditingCard(null);
+    setCardForm({ name: '', limit_reais: '', closing_day: 1, due_day: 10 });
+    setShowCardModal(true);
+  };
+
+  const handleOpenEditCard = (card) => {
+    setEditingCard(card);
+    const reais = ((card.limit_cents || 0) / 100).toFixed(2).replace('.', ',');
+    setCardForm({
+      name: card.name,
+      limit_reais: reais,
+      closing_day: card.closing_day,
+      due_day: card.due_day
+    });
+    setShowCardModal(true);
+  };
+
+  const handleSaveCard = async (e) => {
     e.preventDefault();
-    if (!cardForm.name) return;
-    const limit_cents = Math.round(parseFloat(cardForm.limit_reais.replace(',', '.') || 0) * 100);
+    if (!cardForm.name?.trim()) return;
+    const limit_cents = parseBRLInputToCents(cardForm.limit_reais);
     try {
-      if (window.api?.addCreditCard) {
-        await window.api.addCreditCard({
-          name: cardForm.name,
-          limit_cents,
-          closing_day: parseInt(cardForm.closing_day, 10),
-          due_day: parseInt(cardForm.due_day, 10)
-        });
+      if (editingCard) {
+        if (window.api?.updateCreditCard) {
+          await window.api.updateCreditCard(editingCard.id, {
+            name: cardForm.name.trim(),
+            limit_cents,
+            closing_day: parseInt(cardForm.closing_day, 10),
+            due_day: parseInt(cardForm.due_day, 10)
+          });
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            creditCards: prev.creditCards.map(c => c.id === editingCard.id ? {
+              ...c,
+              name: cardForm.name.trim(),
+              limit_cents,
+              closing_day: parseInt(cardForm.closing_day, 10),
+              due_day: parseInt(cardForm.due_day, 10)
+            } : c)
+          }));
+        }
+        toast.success('Cartão atualizado com sucesso');
+      } else {
+        if (window.api?.addCreditCard) {
+          await window.api.addCreditCard({
+            name: cardForm.name.trim(),
+            limit_cents,
+            closing_day: parseInt(cardForm.closing_day, 10),
+            due_day: parseInt(cardForm.due_day, 10)
+          });
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            creditCards: [...prev.creditCards, {
+              id: Date.now(),
+              name: cardForm.name.trim(),
+              limit_cents,
+              closing_day: parseInt(cardForm.closing_day, 10),
+              due_day: parseInt(cardForm.due_day, 10)
+            }]
+          }));
+        }
+        toast.success('Cartão cadastrado');
       }
-      toast.success('Cartão cadastrado');
       setShowCardModal(false);
+      setEditingCard(null);
       setCardForm({ name: '', limit_reais: '', closing_day: 1, due_day: 10 });
       loadData();
     } catch (err) {
@@ -280,6 +401,11 @@ export default function App() {
     try {
       if (window.api?.deleteCreditCard) {
         await window.api.deleteCreditCard(id);
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          creditCards: prev.creditCards.filter(c => c.id !== id)
+        }));
       }
       toast.success('Cartão removido');
       loadData();
@@ -293,7 +419,7 @@ export default function App() {
     e.preventDefault();
     if (!expenseForm.description || !expenseForm.amount_reais) return;
 
-    let parsedAmount = parseFloat(expenseForm.amount_reais.replace(',', '.') || 0);
+    let amount_cents = parseBRLInputToCents(expenseForm.amount_reais);
     const isInstallment = expenseForm.frequency_type === 'installment';
     const isRecurring = expenseForm.frequency_type === 'recurring';
 
@@ -301,10 +427,8 @@ export default function App() {
     const currInst = isInstallment ? Math.max(1, parseInt(expenseForm.current_installment, 10) || 1) : null;
 
     if (isInstallment && expenseForm.amount_mode === 'total' && totalInst > 0) {
-      parsedAmount = parsedAmount / totalInst;
+      amount_cents = Math.round(amount_cents / totalInst);
     }
-
-    const amount_cents = Math.round(parsedAmount * 100);
 
     try {
       if (window.api?.addExpense) {
@@ -454,7 +578,7 @@ export default function App() {
             <DollarSign size={13} className="stroke-[2.5]" />
           </div>
           <span className="text-xs font-semibold tracking-wide text-gray-200">Cashpoint</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.0.0</span>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.1.0</span>
         </div>
 
         {/* Controles de Janela */}
@@ -707,7 +831,7 @@ export default function App() {
                   <div className="flex items-center justify-between mb-3">
                     <h2 className="text-sm font-semibold text-gray-200">Contas Ativas</h2>
                     <button
-                      onClick={() => setShowAccountModal(true)}
+                      onClick={handleOpenAddAccount}
                       className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
                     >
                       <Plus size={13} /> Adicionar
@@ -718,14 +842,23 @@ export default function App() {
                       <p className="text-xs text-gray-500 py-3 text-center">Nenhuma conta cadastrada.</p>
                     ) : (
                       overview.accounts.map(acc => (
-                        <div key={acc.id} className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/[0.07] transition-colors">
+                        <div key={acc.id} className="group flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/[0.07] transition-colors">
                           <div className="flex items-center gap-2.5">
                             <Wallet size={15} className="text-gray-400" />
                             <span className="text-xs font-medium text-gray-200">{acc.name}</span>
                           </div>
-                          <span className="text-xs font-semibold text-emerald-400">
-                            {formatBRL(acc.balance_cents)}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-emerald-400">
+                              {formatBRL(acc.balance_cents)}
+                            </span>
+                            <button
+                              onClick={() => handleOpenEditAccount(acc)}
+                              className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-emerald-400 p-1 rounded hover:bg-white/10 transition-all"
+                              title="Editar conta e saldo"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          </div>
                         </div>
                       ))
                     )}
@@ -734,7 +867,7 @@ export default function App() {
                   <div className="flex items-center justify-between mt-5 mb-3 pt-4 border-t border-white/5">
                     <h2 className="text-sm font-semibold text-gray-200">Cartões de Crédito</h2>
                     <button
-                      onClick={() => setShowCardModal(true)}
+                      onClick={handleOpenAddCard}
                       className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
                     >
                       <Plus size={13} /> Adicionar
@@ -751,7 +884,7 @@ export default function App() {
                           .reduce((sum, e) => sum + e.amount_cents, 0);
 
                         return (
-                          <div key={c.id} className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/[0.07] transition-colors">
+                          <div key={c.id} className="group flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/[0.07] transition-colors">
                             <div className="flex items-center gap-2.5">
                               <CreditCard size={15} className="text-gray-400" />
                               <div>
@@ -759,13 +892,22 @@ export default function App() {
                                 <div className="text-[10px] text-gray-500">Fecha dia {c.closing_day} • Vence dia {c.due_day}</div>
                               </div>
                             </div>
-                            <div className="text-right">
-                              <div className="text-xs font-semibold text-rose-400">
-                                Fatura: {formatBRL(cardMonthlyTotal)}
+                            <div className="flex items-center gap-2">
+                              <div className="text-right">
+                                <div className="text-xs font-semibold text-rose-400">
+                                  Fatura: {formatBRL(cardMonthlyTotal)}
+                                </div>
+                                <div className="text-[10px] text-gray-500">
+                                  Limite: {formatBRL(c.limit_cents)}
+                                </div>
                               </div>
-                              <div className="text-[10px] text-gray-500">
-                                Limite: {formatBRL(c.limit_cents)}
-                              </div>
+                              <button
+                                onClick={() => handleOpenEditCard(c)}
+                                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-emerald-400 p-1 rounded hover:bg-white/10 transition-all"
+                                title="Editar cartão"
+                              >
+                                <Pencil size={12} />
+                              </button>
                             </div>
                           </div>
                         );
@@ -1045,31 +1187,47 @@ export default function App() {
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-semibold text-gray-200">Contas Bancárias / Carteiras</h2>
                   <button
-                    onClick={() => setShowAccountModal(true)}
+                    onClick={handleOpenAddAccount}
                     className="flex items-center gap-1 text-xs bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-md text-emerald-400 transition-colors"
                   >
                     <Plus size={13} /> Nova Conta
                   </button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {overview.accounts.map(acc => (
-                    <div key={acc.id} className="p-4 rounded-xl bg-dark-800/60 border border-white/5 flex flex-col justify-between">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <span className="text-xs font-semibold text-gray-200">{acc.name}</span>
-                          <div className="text-lg font-bold text-emerald-400 mt-1">
-                            {formatBRL(acc.balance_cents)}
+                  {overview.accounts.length === 0 ? (
+                    <div className="col-span-full py-8 text-center text-xs text-gray-500 bg-dark-800/20 border border-white/5 rounded-xl">
+                      Nenhuma conta cadastrada no momento.
+                    </div>
+                  ) : (
+                    overview.accounts.map(acc => (
+                      <div key={acc.id} className="p-4 rounded-xl bg-dark-800/60 border border-white/5 flex flex-col justify-between hover:border-white/10 transition-colors">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <span className="text-xs font-semibold text-gray-200">{acc.name}</span>
+                            <div className="text-lg font-bold text-emerald-400 mt-1">
+                              {formatBRL(acc.balance_cents)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleOpenEditAccount(acc)}
+                              className="text-gray-400 hover:text-emerald-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                              title="Editar conta e saldo"
+                            >
+                              <Pencil size={13} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteAccount(acc.id)}
+                              className="text-gray-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                              title="Excluir conta"
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </div>
                         </div>
-                        <button
-                          onClick={() => handleDeleteAccount(acc.id)}
-                          className="text-gray-500 hover:text-rose-400 p-1"
-                        >
-                          <Trash2 size={13} />
-                        </button>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -1078,43 +1236,59 @@ export default function App() {
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-semibold text-gray-200">Cartões de Crédito</h2>
                   <button
-                    onClick={() => setShowCardModal(true)}
+                    onClick={handleOpenAddCard}
                     className="flex items-center gap-1 text-xs bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-md text-emerald-400 transition-colors"
                   >
                     <Plus size={13} /> Novo Cartão
                   </button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {overview.creditCards.map(c => {
-                    const cardMonthlyTotal = monthExpenses
-                      .filter(e => e.credit_card_id === c.id)
-                      .reduce((sum, e) => sum + e.amount_cents, 0);
+                  {overview.creditCards.length === 0 ? (
+                    <div className="col-span-full py-8 text-center text-xs text-gray-500 bg-dark-800/20 border border-white/5 rounded-xl">
+                      Nenhum cartão cadastrado no momento.
+                    </div>
+                  ) : (
+                    overview.creditCards.map(c => {
+                      const cardMonthlyTotal = monthExpenses
+                        .filter(e => e.credit_card_id === c.id)
+                        .reduce((sum, e) => sum + e.amount_cents, 0);
 
-                    return (
-                      <div key={c.id} className="p-4 rounded-xl bg-dark-800/60 border border-white/5 flex flex-col justify-between">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <span className="text-xs font-semibold text-gray-200">{c.name}</span>
-                            <div className="text-xs text-rose-400 font-semibold mt-1">
-                              Fatura em {monthLabel.split(' ')[0]}: {formatBRL(cardMonthlyTotal)}
+                      return (
+                        <div key={c.id} className="p-4 rounded-xl bg-dark-800/60 border border-white/5 flex flex-col justify-between hover:border-white/10 transition-colors">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <span className="text-xs font-semibold text-gray-200">{c.name}</span>
+                              <div className="text-xs text-rose-400 font-semibold mt-1">
+                                Fatura em {monthLabel.split(' ')[0]}: {formatBRL(cardMonthlyTotal)}
+                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                Limite: <strong className="text-white">{formatBRL(c.limit_cents)}</strong>
+                              </div>
+                              <div className="text-[10px] text-gray-500 mt-0.5">
+                                Fecha dia {c.closing_day} • Vence dia {c.due_day}
+                              </div>
                             </div>
-                            <div className="text-xs text-gray-400 mt-0.5">
-                              Limite: <strong className="text-white">{formatBRL(c.limit_cents)}</strong>
-                            </div>
-                            <div className="text-[10px] text-gray-500 mt-0.5">
-                              Fecha dia {c.closing_day} • Vence dia {c.due_day}
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleOpenEditCard(c)}
+                                className="text-gray-400 hover:text-emerald-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                                title="Editar cartão"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteCard(c.id)}
+                                className="text-gray-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                                title="Excluir cartão"
+                              >
+                                <Trash2 size={13} />
+                              </button>
                             </div>
                           </div>
-                          <button
-                            onClick={() => handleDeleteCard(c.id)}
-                            className="text-gray-500 hover:text-rose-400 p-1"
-                          >
-                            <Trash2 size={13} />
-                          </button>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </div>
@@ -1122,11 +1296,25 @@ export default function App() {
         </main>
       </div>
 
-      {/* MODAL: NOVA CONTA */}
+      {/* MODAL: CONTA (NOVA OU EDITAR) */}
       {showAccountModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleCreateAccount} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-sm space-y-4">
-            <h3 className="text-sm font-semibold text-white">Adicionar Nova Conta</h3>
+          <form onSubmit={handleSaveAccount} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-sm space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <h3 className="text-sm font-semibold text-white">
+                {editingAccount ? 'Editar Conta' : 'Adicionar Nova Conta'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAccountModal(false);
+                  setEditingAccount(null);
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
             <div>
               <label className="text-[11px] text-gray-400 block mb-1">Nome da Conta / Banco</label>
               <input
@@ -1139,7 +1327,9 @@ export default function App() {
               />
             </div>
             <div>
-              <label className="text-[11px] text-gray-400 block mb-1">Saldo Inicial (R$)</label>
+              <label className="text-[11px] text-gray-400 block mb-1">
+                {editingAccount ? 'Saldo Atual (R$)' : 'Saldo Inicial (R$)'}
+              </label>
               <input
                 type="text"
                 placeholder="0,00"
@@ -1147,31 +1337,51 @@ export default function App() {
                 onChange={e => setAccountForm({ ...accountForm, balance_reais: e.target.value })}
                 className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
               />
+              <span className="text-[10px] text-gray-500 mt-1 block">
+                {editingAccount ? 'Altere o saldo conforme extrato ou conciliação.' : 'Saldo que servirá como base das despesas.'}
+              </span>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
               <button
                 type="button"
-                onClick={() => setShowAccountModal(false)}
+                onClick={() => {
+                  setShowAccountModal(false);
+                  setEditingAccount(null);
+                }}
                 className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-white/5"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                className="px-3 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+                className="px-3.5 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-md shadow-emerald-950/30 transition-colors"
               >
-                Salvar Conta
+                {editingAccount ? 'Atualizar Conta' : 'Salvar Conta'}
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* MODAL: NOVO CARTÃO */}
+      {/* MODAL: CARTÃO (NOVO OU EDITAR) */}
       {showCardModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleCreateCard} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-sm space-y-4">
-            <h3 className="text-sm font-semibold text-white">Adicionar Cartão de Crédito</h3>
+          <form onSubmit={handleSaveCard} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-sm space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <h3 className="text-sm font-semibold text-white">
+                {editingCard ? 'Editar Cartão de Crédito' : 'Adicionar Cartão de Crédito'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCardModal(false);
+                  setEditingCard(null);
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
             <div>
               <label className="text-[11px] text-gray-400 block mb-1">Nome do Cartão</label>
               <input
@@ -1219,19 +1429,22 @@ export default function App() {
                 />
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
               <button
                 type="button"
-                onClick={() => setShowCardModal(false)}
+                onClick={() => {
+                  setShowCardModal(false);
+                  setEditingCard(null);
+                }}
                 className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-white/5"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                className="px-3 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+                className="px-3.5 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-md shadow-emerald-950/30 transition-colors"
               >
-                Salvar Cartão
+                {editingCard ? 'Atualizar Cartão' : 'Salvar Cartão'}
               </button>
             </div>
           </form>
