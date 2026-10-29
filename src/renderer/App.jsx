@@ -22,7 +22,15 @@ import {
   RotateCcw,
   DollarSign,
   PauseCircle,
-  PlayCircle
+  PlayCircle,
+  BarChart3,
+  Filter,
+  Search,
+  SlidersHorizontal,
+  ArrowUpDown,
+  Percent,
+  AlertCircle,
+  ShieldCheck
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 
@@ -107,6 +115,10 @@ const PRESET_CATEGORY_COLORS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [expenseFilter, setExpenseFilter] = useState('all'); // 'all' | 'recurring' | 'installment' | 'one_time'
+  const [categoryFilter, setCategoryFilter] = useState('all'); // 'all' | category_id | 'none'
+  const [cardFilter, setCardFilter] = useState('all'); // 'all' | 'cards_only' | 'accounts_only' | `card:${id}` | `account:${id}`
+  const [searchFilter, setSearchFilter] = useState('');
+  const [hoveredCategory, setHoveredCategory] = useState(null);
   const [monthOffset, setMonthOffset] = useState(0); // 0 = Mês atual, 1 = Próximo mês, -1 = Mês passado
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState({
@@ -317,9 +329,200 @@ export default function App() {
 
   // Despesas filtradas para exibição na tabela
   const displayedExpenses = useMemo(() => {
-    if (expenseFilter === 'all') return monthExpenses;
-    return monthExpenses.filter(e => e.frequency_type === expenseFilter);
-  }, [monthExpenses, expenseFilter]);
+    return monthExpenses.filter(exp => {
+      // Filtro por frequência
+      if (expenseFilter !== 'all' && exp.frequency_type !== expenseFilter) {
+        return false;
+      }
+      // Filtro por categoria
+      if (categoryFilter !== 'all') {
+        if (categoryFilter === 'none') {
+          if (exp.category_id) return false;
+        } else if (String(exp.category_id) !== String(categoryFilter)) {
+          return false;
+        }
+      }
+      // Filtro por cartão ou conta
+      if (cardFilter !== 'all') {
+        if (cardFilter.startsWith('card:')) {
+          const cardId = cardFilter.replace('card:', '');
+          if (exp.target_type !== 'card' || String(exp.credit_card_id) !== cardId) {
+            return false;
+          }
+        } else if (cardFilter.startsWith('account:')) {
+          const accId = cardFilter.replace('account:', '');
+          if (exp.target_type !== 'account' || String(exp.account_id) !== accId) {
+            return false;
+          }
+        } else if (cardFilter === 'cards_only') {
+          if (exp.target_type !== 'card') return false;
+        } else if (cardFilter === 'accounts_only') {
+          if (exp.target_type !== 'account') return false;
+        }
+      }
+      // Filtro por busca textual
+      if (searchFilter.trim()) {
+        const query = searchFilter.toLowerCase().trim();
+        const descMatch = exp.description?.toLowerCase().includes(query);
+        const catMatch = exp.category_name?.toLowerCase().includes(query);
+        const cardMatch = exp.credit_card_name?.toLowerCase().includes(query);
+        const accMatch = exp.account_name?.toLowerCase().includes(query);
+        if (!descMatch && !catMatch && !cardMatch && !accMatch) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [monthExpenses, expenseFilter, categoryFilter, cardFilter, searchFilter]);
+
+  // Total das despesas após aplicação dos filtros
+  const filteredTotalCents = useMemo(() => {
+    return displayedExpenses.reduce((sum, e) => sum + (e.amount_cents || 0), 0);
+  }, [displayedExpenses]);
+
+  // Verifica se há qualquer filtro ativo
+  const hasActiveFilters = expenseFilter !== 'all' || categoryFilter !== 'all' || cardFilter !== 'all' || searchFilter.trim() !== '';
+
+  const handleClearFilters = () => {
+    setExpenseFilter('all');
+    setCategoryFilter('all');
+    setCardFilter('all');
+    setSearchFilter('');
+  };
+
+  // Análise e Agrupamento por Categoria (para Gráficos e Tabelas)
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map();
+
+    for (const exp of monthExpenses) {
+      const catId = exp.category_id || 'none';
+      const existing = map.get(catId);
+      if (existing) {
+        existing.totalCents += exp.amount_cents || 0;
+        existing.count += 1;
+        existing.expenses.push(exp);
+      } else {
+        map.set(catId, {
+          id: catId,
+          name: exp.category_name || 'Sem Categoria',
+          color: exp.category_color || '#6b7280',
+          totalCents: exp.amount_cents || 0,
+          count: 1,
+          expenses: [exp]
+        });
+      }
+    }
+
+    const total = monthTotalCents || 1;
+    return Array.from(map.values())
+      .filter(item => item.totalCents > 0)
+      .sort((a, b) => b.totalCents - a.totalCents)
+      .map(item => ({
+        ...item,
+        percentage: Math.round((item.totalCents / total) * 1000) / 10,
+        avgCents: Math.round(item.totalCents / (item.count || 1))
+      }));
+  }, [monthExpenses, monthTotalCents]);
+
+  // Análise e Agrupamento por Cartão (para Gráficos e Tabelas)
+  const cardBreakdown = useMemo(() => {
+    return overview.creditCards.map(card => {
+      const cardExpenses = monthExpenses.filter(e => e.credit_card_id === card.id);
+      const totalCents = cardExpenses.reduce((sum, e) => sum + (e.amount_cents || 0), 0);
+      const pendingCents = cardExpenses.filter(e => !e.is_paid).reduce((sum, e) => sum + (e.amount_cents || 0), 0);
+      const limitCents = card.limit_cents || 0;
+      const usagePercent = limitCents > 0 ? Math.min(100, Math.round((totalCents / limitCents) * 100)) : 0;
+      const availableCents = Math.max(0, limitCents - totalCents);
+
+      return {
+        id: card.id,
+        name: card.name,
+        closing_day: card.closing_day,
+        due_day: card.due_day,
+        limitCents,
+        totalCents,
+        pendingCents,
+        availableCents,
+        usagePercent,
+        count: cardExpenses.length
+      };
+    }).sort((a, b) => b.totalCents - a.totalCents);
+  }, [overview.creditCards, monthExpenses]);
+
+  // Análise por Conta Bancária
+  const accountBreakdown = useMemo(() => {
+    return overview.accounts.map(acc => {
+      const accExpenses = monthExpenses.filter(e => e.target_type === 'account' && e.account_id === acc.id);
+      const totalCents = accExpenses.reduce((sum, e) => sum + (e.amount_cents || 0), 0);
+      const pendingCents = accExpenses.filter(e => !e.is_paid).reduce((sum, e) => sum + (e.amount_cents || 0), 0);
+
+      return {
+        id: acc.id,
+        name: acc.name,
+        balance_cents: acc.balance_cents || 0,
+        totalCents,
+        pendingCents,
+        count: accExpenses.length
+      };
+    }).sort((a, b) => b.totalCents - a.totalCents);
+  }, [overview.accounts, monthExpenses]);
+
+  // Composição por Natureza (Recorrente vs Parcelada vs À Vista)
+  const frequencyBreakdown = useMemo(() => {
+    const recurring = monthExpenses.filter(e => e.frequency_type === 'recurring');
+    const installment = monthExpenses.filter(e => e.frequency_type === 'installment');
+    const oneTime = monthExpenses.filter(e => e.frequency_type === 'one_time');
+
+    const recurringCents = recurring.reduce((s, e) => s + (e.amount_cents || 0), 0);
+    const installmentCents = installment.reduce((s, e) => s + (e.amount_cents || 0), 0);
+    const oneTimeCents = oneTime.reduce((s, e) => s + (e.amount_cents || 0), 0);
+    const total = monthTotalCents || 1;
+
+    return {
+      recurring: {
+        cents: recurringCents,
+        count: recurring.length,
+        percent: Math.round((recurringCents / total) * 1000) / 10
+      },
+      installment: {
+        cents: installmentCents,
+        count: installment.length,
+        percent: Math.round((installmentCents / total) * 1000) / 10
+      },
+      oneTime: {
+        cents: oneTimeCents,
+        count: oneTime.length,
+        percent: Math.round((oneTimeCents / total) * 1000) / 10
+      }
+    };
+  }, [monthExpenses, monthTotalCents]);
+
+  const cardsTotalCents = useMemo(() => {
+    return cardBreakdown.reduce((s, c) => s + c.totalCents, 0);
+  }, [cardBreakdown]);
+
+  const accountsTotalCents = useMemo(() => {
+    return accountBreakdown.reduce((s, a) => s + a.totalCents, 0);
+  }, [accountBreakdown]);
+
+  const topCategory = categoryBreakdown[0] || null;
+  const topCard = cardBreakdown[0] || null;
+
+  // Ações de Filtro Rápido a partir de Gráficos/Tabelas
+  const handleFilterByCategory = (categoryId) => {
+    setCategoryFilter(String(categoryId));
+    setActiveTab('expenses');
+  };
+
+  const handleFilterByCard = (cardId) => {
+    setCardFilter(`card:${cardId}`);
+    setActiveTab('expenses');
+  };
+
+  const handleFilterByAccount = (accId) => {
+    setCardFilter(`account:${accId}`);
+    setActiveTab('expenses');
+  };
 
   // Ações de Contas
   const handleOpenAddAccount = () => {
@@ -824,6 +1027,83 @@ export default function App() {
     }
   };
 
+  // Renderizador do Gráfico de Rosca (Donut SVG Puro)
+  const renderDonut = (size = 180, strokeWidth = 18) => {
+    const r = (size - strokeWidth) / 2;
+    const cx = size / 2;
+    const cy = size / 2;
+    const circumference = 2 * Math.PI * r;
+
+    if (monthTotalCents === 0 || categoryBreakdown.length === 0) {
+      return (
+        <div className="relative flex items-center justify-center mx-auto" style={{ width: size, height: size }}>
+          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            <circle cx={cx} cy={cy} r={r} stroke="rgba(255, 255, 255, 0.08)" strokeWidth={strokeWidth} fill="none" />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-2">
+            <span className="text-[10px] text-gray-500 font-medium">Sem despesas</span>
+          </div>
+        </div>
+      );
+    }
+
+    let accumulated = 0;
+    return (
+      <div className="relative flex items-center justify-center mx-auto" style={{ width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90">
+          {categoryBreakdown.map(cat => {
+            const ratio = cat.totalCents / monthTotalCents;
+            const strokeLength = Math.max(1, ratio * circumference);
+            const strokeDasharray = `${strokeLength} ${circumference - strokeLength}`;
+            const strokeDashoffset = -accumulated;
+            accumulated += strokeLength;
+
+            const isHovered = hoveredCategory === cat.id;
+
+            return (
+              <circle
+                key={cat.id}
+                cx={cx}
+                cy={cy}
+                r={r}
+                stroke={cat.color || '#6b7280'}
+                strokeWidth={isHovered ? strokeWidth + 4 : strokeWidth}
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                fill="none"
+                className="transition-all duration-200 cursor-pointer"
+                onMouseEnter={() => setHoveredCategory(cat.id)}
+                onMouseLeave={() => setHoveredCategory(null)}
+                onClick={() => handleFilterByCategory(cat.id)}
+              />
+            );
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none p-2">
+          {hoveredCategory ? (
+            (() => {
+              const hCat = categoryBreakdown.find(c => c.id === hoveredCategory);
+              if (!hCat) return null;
+              return (
+                <>
+                  <span className="text-[10px] font-semibold text-gray-400 truncate max-w-[100px]">{hCat.name}</span>
+                  <span className="text-xs font-bold text-white mt-0.5">{formatBRL(hCat.totalCents)}</span>
+                  <span className="text-[10px] font-semibold text-emerald-400">{hCat.percentage}%</span>
+                </>
+              );
+            })()
+          ) : (
+            <>
+              <span className="text-[9px] text-gray-400 uppercase tracking-wider font-semibold">Total</span>
+              <span className="text-xs font-bold text-white mt-0.5">{formatBRL(monthTotalCents)}</span>
+              <span className="text-[10px] text-gray-400">{categoryBreakdown.length} categ.</span>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen select-none bg-dark-900 text-gray-100 overflow-hidden">
       <Toaster position="top-right" richColors />
@@ -835,7 +1115,7 @@ export default function App() {
             <DollarSign size={13} className="stroke-[2.5]" />
           </div>
           <span className="text-xs font-semibold tracking-wide text-gray-200">Cashpoint</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.3.0</span>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.4.0</span>
         </div>
 
         {/* Controles de Janela */}
@@ -894,6 +1174,18 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('reports')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'reports'
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+              }`}
+            >
+              <BarChart3 size={17} />
+              <span>Gráficos & Relatórios</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('accounts')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === 'accounts'
@@ -933,11 +1225,13 @@ export default function App() {
               <h1 className="text-xl font-bold tracking-tight text-white">
                 {activeTab === 'overview' && 'Painel Financeiro'}
                 {activeTab === 'expenses' && 'Despesas & Faturas'}
+                {activeTab === 'reports' && 'Gráficos & Análises Financeiras'}
                 {activeTab === 'accounts' && 'Minhas Contas, Cartões & Categorias'}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
                 {activeTab === 'overview' && `Projeções e fechamento de contas para ${monthLabel}.`}
                 {activeTab === 'expenses' && `Lançamentos, assinaturas e parcelas vigentes em ${monthLabel}.`}
+                {activeTab === 'reports' && `Visão analítica por categorias, faturas de cartões e tabelas de ${monthLabel}.`}
                 {activeTab === 'accounts' && 'Gerencie limites, dias de vencimento, saldos e categorias personalizadas.'}
               </p>
             </div>
@@ -1236,56 +1530,271 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Resumo Visual: Distribuição por Categoria & Cartões */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Mini Donut e Top Categorias */}
+                <div className="p-4 rounded-xl bg-dark-800/40 border border-white/5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <PieChart size={16} className="text-emerald-400" />
+                      <h2 className="text-sm font-semibold text-gray-200">Gastos por Categoria</h2>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('reports')}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-0.5 hover:underline"
+                    >
+                      Ver gráficos completos <ChevronRight size={13} />
+                    </button>
+                  </div>
+
+                  {categoryBreakdown.length === 0 ? (
+                    <p className="text-xs text-gray-500 py-6 text-center">Nenhum gasto registrado em {monthLabel}.</p>
+                  ) : (
+                    <div className="flex flex-col sm:flex-row items-center gap-5">
+                      <div className="shrink-0">
+                        {renderDonut(130, 14)}
+                      </div>
+                      <div className="flex-1 w-full space-y-2">
+                        {categoryBreakdown.slice(0, 4).map(cat => (
+                          <div
+                            key={cat.id}
+                            onClick={() => handleFilterByCategory(cat.id)}
+                            className="p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer group"
+                            title={`Clique para filtrar despesas de ${cat.name}`}
+                          >
+                            <div className="flex items-center justify-between text-xs mb-1">
+                              <span className="flex items-center gap-1.5 text-gray-300 font-medium group-hover:text-emerald-300 transition-colors">
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
+                                {cat.name}
+                              </span>
+                              <span className="font-semibold text-gray-200">{formatBRL(cat.totalCents)} ({cat.percentage}%)</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-dark-900 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all duration-300"
+                                style={{ width: `${Math.min(100, cat.percentage)}%`, backgroundColor: cat.color }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Resumo de Limites dos Cartões */}
+                <div className="p-4 rounded-xl bg-dark-800/40 border border-white/5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <CreditCard size={16} className="text-purple-400" />
+                      <h2 className="text-sm font-semibold text-gray-200">Uso do Limite de Cartões</h2>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('reports')}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-0.5 hover:underline"
+                    >
+                      Ver detalhes <ChevronRight size={13} />
+                    </button>
+                  </div>
+
+                  {cardBreakdown.length === 0 ? (
+                    <p className="text-xs text-gray-500 py-6 text-center">Nenhum cartão cadastrado.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {cardBreakdown.slice(0, 3).map(card => {
+                        const statusColor = card.usagePercent > 75 ? '#f43f5e' : card.usagePercent > 40 ? '#eab308' : '#10b981';
+                        return (
+                          <div
+                            key={card.id}
+                            onClick={() => handleFilterByCard(card.id)}
+                            className="p-2.5 rounded-lg bg-white/5 hover:bg-white/[0.08] transition-colors cursor-pointer group"
+                            title={`Clique para filtrar despesas do cartão ${card.name}`}
+                          >
+                            <div className="flex items-center justify-between text-xs mb-1.5">
+                              <span className="font-medium text-gray-200 group-hover:text-purple-300 transition-colors flex items-center gap-1.5">
+                                <CreditCard size={13} className="text-purple-400" />
+                                {card.name}
+                              </span>
+                              <span className="font-semibold text-rose-400">
+                                {formatBRL(card.totalCents)}{' '}
+                                <span className="text-[10px] text-gray-500 font-normal">de {formatBRL(card.limitCents)}</span>
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-dark-900 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all duration-500"
+                                style={{
+                                  width: `${Math.min(100, card.usagePercent)}%`,
+                                  backgroundColor: statusColor
+                                }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-gray-400 mt-1">
+                              <span>Livre: <strong className="text-gray-300">{formatBRL(card.availableCents)}</strong></span>
+                              <span className="font-medium" style={{ color: statusColor }}>{card.usagePercent}% utilizado</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
           {/* VIEW: DESPESAS */}
           {activeTab === 'expenses' && (
             <div className="space-y-4">
-              {/* Filtros por frequência */}
-              <div className="flex items-center gap-2 border-b border-white/5 pb-3">
-                <button
-                  onClick={() => setExpenseFilter('all')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    expenseFilter === 'all'
-                      ? 'bg-white/10 text-white font-semibold'
-                      : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  Todas ({monthExpenses.length})
-                </button>
-                <button
-                  onClick={() => setExpenseFilter('recurring')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                    expenseFilter === 'recurring'
-                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 font-semibold'
-                      : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  <Repeat size={12} />
-                  Contínuas & Assinaturas ({monthExpenses.filter(e => e.frequency_type === 'recurring').length})
-                </button>
-                <button
-                  onClick={() => setExpenseFilter('installment')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                    expenseFilter === 'installment'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
-                      : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  <Layers size={12} />
-                  Parceladas ({monthExpenses.filter(e => e.frequency_type === 'installment').length})
-                </button>
-                <button
-                  onClick={() => setExpenseFilter('one_time')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    expenseFilter === 'one_time'
-                      ? 'bg-white/10 text-white font-semibold'
-                      : 'text-gray-400 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  À Vista / Únicas ({monthExpenses.filter(e => e.frequency_type === 'one_time').length})
-                </button>
+              {/* Toolbar de Filtros Avançados */}
+              <div className="p-3.5 rounded-xl bg-dark-800/40 border border-white/5 space-y-3">
+                {/* Linha 1: Filtros de Frequência */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+                  <button
+                    onClick={() => setExpenseFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      expenseFilter === 'all'
+                        ? 'bg-white/10 text-white font-semibold shadow-sm'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    Todas ({monthExpenses.length})
+                  </button>
+                  <button
+                    onClick={() => setExpenseFilter('recurring')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      expenseFilter === 'recurring'
+                        ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 font-semibold'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Repeat size={12} />
+                    Contínuas ({monthExpenses.filter(e => e.frequency_type === 'recurring').length})
+                  </button>
+                  <button
+                    onClick={() => setExpenseFilter('installment')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      expenseFilter === 'installment'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Layers size={12} />
+                    Parceladas ({monthExpenses.filter(e => e.frequency_type === 'installment').length})
+                  </button>
+                  <button
+                    onClick={() => setExpenseFilter('one_time')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      expenseFilter === 'one_time'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    À Vista ({monthExpenses.filter(e => e.frequency_type === 'one_time').length})
+                  </button>
+                </div>
+
+                {/* Linha 2: Busca por texto, Filtro por Categoria e Filtro por Cartão */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1 border-t border-white/5">
+                  {/* Busca textual */}
+                  <div className="relative">
+                    <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Buscar despesa por nome..."
+                      value={searchFilter}
+                      onChange={e => setSearchFilter(e.target.value)}
+                      className="w-full bg-dark-900 border border-white/10 rounded-lg pl-8 pr-7 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+                    />
+                    {searchFilter && (
+                      <button
+                        onClick={() => setSearchFilter('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                        title="Limpar busca"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filtro por Categoria */}
+                  <div className="relative">
+                    <select
+                      value={categoryFilter}
+                      onChange={e => setCategoryFilter(e.target.value)}
+                      className={`w-full bg-dark-900 border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 ${
+                        categoryFilter !== 'all'
+                          ? 'border-emerald-500/50 text-emerald-300 font-medium'
+                          : 'border-white/10 text-gray-300'
+                      }`}
+                    >
+                      <option value="all">Todas as Categorias</option>
+                      <option value="none">Sem Categoria</option>
+                      {overview.categories.map(cat => (
+                        <option key={cat.id} value={cat.id}>
+                          {cat.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Filtro por Cartão ou Conta */}
+                  <div className="relative">
+                    <select
+                      value={cardFilter}
+                      onChange={e => setCardFilter(e.target.value)}
+                      className={`w-full bg-dark-900 border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 ${
+                        cardFilter !== 'all'
+                          ? 'border-emerald-500/50 text-emerald-300 font-medium'
+                          : 'border-white/10 text-gray-300'
+                      }`}
+                    >
+                      <option value="all">Todos os Cartões e Contas</option>
+                      <optgroup label="Tipo de Origem">
+                        <option value="cards_only">Somente Cartões de Crédito</option>
+                        <option value="accounts_only">Somente Contas / Carteiras</option>
+                      </optgroup>
+                      {overview.creditCards.length > 0 && (
+                        <optgroup label="Cartões de Crédito">
+                          {overview.creditCards.map(c => (
+                            <option key={c.id} value={`card:${c.id}`}>
+                              Cartão: {c.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {overview.accounts.length > 0 && (
+                        <optgroup label="Contas Bancárias">
+                          {overview.accounts.map(a => (
+                            <option key={a.id} value={`account:${a.id}`}>
+                              Conta: {a.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Banner de status quando houver filtros aplicados */}
+                {hasActiveFilters && (
+                  <div className="flex items-center justify-between text-xs pt-2 px-1 text-gray-400 border-t border-white/5">
+                    <div className="flex items-center gap-2">
+                      <Filter size={13} className="text-emerald-400" />
+                      <span>
+                        Exibindo <strong className="text-white">{displayedExpenses.length}</strong> de {monthExpenses.length} lançamentos
+                        • Total filtrado: <strong className="text-rose-400">{formatBRL(filteredTotalCents)}</strong>
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleClearFilters}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold hover:underline flex items-center gap-1"
+                    >
+                      <RotateCcw size={12} /> Limpar Filtros
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Tabela de Despesas */}
@@ -1440,6 +1949,437 @@ export default function App() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: RELATÓRIOS & GRÁFICOS */}
+          {activeTab === 'reports' && (
+            <div className="space-y-6">
+              {/* KPIs Analíticos */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Total do Ciclo</span>
+                    <TrendingDown size={16} className="text-rose-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-rose-400 tracking-tight">
+                    {formatBRL(monthTotalCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    {monthExpenses.length} despesa(s) em {monthLabel.split(' ')[0]}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Maior Categoria</span>
+                    <span
+                      className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+                      style={{ backgroundColor: topCategory?.color || '#6b7280' }}
+                    />
+                  </div>
+                  <div className="text-xl font-bold text-white tracking-tight truncate" title={topCategory?.name || 'Nenhum'}>
+                    {topCategory ? topCategory.name : 'Nenhuma'}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    {topCategory ? `${formatBRL(topCategory.totalCents)} (${topCategory.percentage}% dos gastos)` : 'Sem lançamentos'}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Maior Fatura de Cartão</span>
+                    <CreditCard size={16} className="text-purple-400" />
+                  </div>
+                  <div className="text-xl font-bold text-purple-400 tracking-tight truncate" title={topCard?.name || 'Nenhum'}>
+                    {topCard ? topCard.name : 'Nenhum cartão'}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    {topCard ? `${formatBRL(topCard.totalCents)} (${topCard.usagePercent}% do limite)` : 'Sem gastos em cartões'}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Divisão de Pagamentos</span>
+                    <Wallet size={16} className="text-sky-400" />
+                  </div>
+                  <div className="text-xl font-bold text-white tracking-tight">
+                    {formatBRL(cardsTotalCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    Em cartões • {formatBRL(accountsTotalCents)} em contas bancárias
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid 2 Colunas: Gráfico Donut de Categorias e Barras de Limites */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Gráfico Donut SVG por Categorias */}
+                <div className="p-5 rounded-xl bg-dark-800/40 border border-white/5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <PieChart size={17} className="text-emerald-400" />
+                      <div>
+                        <h2 className="text-sm font-semibold text-gray-200">Distribuição por Categoria</h2>
+                        <p className="text-[11px] text-gray-500">Ranking das categorias com maior peso no orçamento</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded-full">
+                      {categoryBreakdown.length} categorias com gastos
+                    </span>
+                  </div>
+
+                  {categoryBreakdown.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-gray-500">
+                      Nenhum gasto registrado para exibir no gráfico em {monthLabel}.
+                    </div>
+                  ) : (
+                    <div className="flex flex-col md:flex-row items-center gap-6">
+                      <div className="shrink-0 p-2">
+                        {renderDonut(180, 20)}
+                      </div>
+
+                      <div className="flex-1 w-full space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                        {categoryBreakdown.map(cat => (
+                          <div
+                            key={cat.id}
+                            onClick={() => handleFilterByCategory(cat.id)}
+                            className="p-2 rounded-lg bg-white/[0.02] hover:bg-white/[0.07] transition-all cursor-pointer group border border-transparent hover:border-white/5"
+                            title={`Clique para filtrar despesas de ${cat.name}`}
+                          >
+                            <div className="flex items-center justify-between text-xs mb-1">
+                              <span className="flex items-center gap-2 font-medium text-gray-200 group-hover:text-emerald-300 transition-colors">
+                                <span className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: cat.color }} />
+                                <span className="truncate max-w-[140px]">{cat.name}</span>
+                                <span className="text-[10px] text-gray-500">({cat.count}x)</span>
+                              </span>
+                              <div className="text-right">
+                                <span className="font-semibold text-gray-100">{formatBRL(cat.totalCents)}</span>
+                                <span className="text-[10px] text-emerald-400 font-medium ml-1.5">{cat.percentage}%</span>
+                              </div>
+                            </div>
+                            <div className="w-full h-1.5 bg-dark-900 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all duration-300"
+                                style={{ width: `${Math.min(100, cat.percentage)}%`, backgroundColor: cat.color }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Comprometimento dos Limites de Cartões de Crédito */}
+                <div className="p-5 rounded-xl bg-dark-800/40 border border-white/5 flex flex-col justify-between">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <CreditCard size={17} className="text-purple-400" />
+                      <div>
+                        <h2 className="text-sm font-semibold text-gray-200">Uso de Limite dos Cartões</h2>
+                        <p className="text-[11px] text-gray-500">Comprometimento de cada cartão em {monthLabel}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {cardBreakdown.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-gray-500">
+                      Nenhum cartão cadastrado no momento.
+                    </div>
+                  ) : (
+                    <div className="space-y-3.5">
+                      {cardBreakdown.map(card => {
+                        const statusColor = card.usagePercent > 75 ? '#f43f5e' : card.usagePercent > 40 ? '#eab308' : '#10b981';
+                        const statusBadge = card.usagePercent > 75 ? 'Atenção / Alto' : card.usagePercent > 40 ? 'Moderado' : 'Saudável';
+
+                        return (
+                          <div
+                            key={card.id}
+                            onClick={() => handleFilterByCard(card.id)}
+                            className="p-3 rounded-xl bg-white/5 hover:bg-white/[0.08] transition-all cursor-pointer group border border-transparent hover:border-white/5"
+                            title={`Clique para ver despesas do cartão ${card.name}`}
+                          >
+                            <div className="flex items-center justify-between text-xs mb-1.5">
+                              <div className="flex items-center gap-2">
+                                <CreditCard size={14} className="text-purple-400" />
+                                <span className="font-semibold text-gray-200 group-hover:text-purple-300 transition-colors">
+                                  {card.name}
+                                </span>
+                                <span className="text-[10px] text-gray-500">
+                                  Fecha {card.closing_day} • Vence {card.due_day}
+                                </span>
+                              </div>
+                              <span
+                                className="text-[10px] px-2 py-0.5 rounded-full font-semibold border"
+                                style={{
+                                  backgroundColor: `${statusColor}18`,
+                                  color: statusColor,
+                                  borderColor: `${statusColor}33`
+                                }}
+                              >
+                                {statusBadge}
+                              </span>
+                            </div>
+
+                            <div className="w-full h-2.5 bg-dark-900 rounded-full overflow-hidden my-2">
+                              <div
+                                className="h-full rounded-full transition-all duration-500 shadow-sm"
+                                style={{
+                                  width: `${Math.min(100, card.usagePercent)}%`,
+                                  backgroundColor: statusColor
+                                }}
+                              />
+                            </div>
+
+                            <div className="flex items-center justify-between text-[11px] text-gray-400">
+                              <div>
+                                Fatura: <strong className="text-rose-400">{formatBRL(card.totalCents)}</strong> de {formatBRL(card.limitCents)}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span>Livre: <strong className="text-gray-200">{formatBRL(card.availableCents)}</strong></span>
+                                <span className="font-bold" style={{ color: statusColor }}>{card.usagePercent}%</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Composição por Natureza (Recorrente vs Parcelada vs À Vista) */}
+              <div className="p-5 rounded-xl bg-dark-800/40 border border-white/5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-gray-200">Composição por Natureza da Despesa</h2>
+                    <p className="text-[11px] text-gray-500">
+                      Entenda como o orçamento deste mês se divide entre custos contínuos, parcelas e compras avulsas
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold text-white">
+                    {formatBRL(monthTotalCents)}
+                  </span>
+                </div>
+
+                {/* Barra Segmentada Proporcional */}
+                <div className="w-full h-3 bg-dark-900 rounded-full overflow-hidden flex gap-0.5 p-0.5">
+                  {frequencyBreakdown.recurring.percent > 0 && (
+                    <div
+                      className="h-full rounded-l-full bg-sky-500 transition-all duration-300"
+                      style={{ width: `${frequencyBreakdown.recurring.percent}%` }}
+                      title={`Contínuas: ${frequencyBreakdown.recurring.percent}%`}
+                    />
+                  )}
+                  {frequencyBreakdown.installment.percent > 0 && (
+                    <div
+                      className="h-full bg-amber-500 transition-all duration-300"
+                      style={{ width: `${frequencyBreakdown.installment.percent}%` }}
+                      title={`Parceladas: ${frequencyBreakdown.installment.percent}%`}
+                    />
+                  )}
+                  {frequencyBreakdown.oneTime.percent > 0 && (
+                    <div
+                      className="h-full rounded-r-full bg-emerald-500 transition-all duration-300"
+                      style={{ width: `${frequencyBreakdown.oneTime.percent}%` }}
+                      title={`À Vista: ${frequencyBreakdown.oneTime.percent}%`}
+                    />
+                  )}
+                </div>
+
+                {/* 3 Cards de Detalhe por Natureza */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                  <div
+                    onClick={() => { setExpenseFilter('recurring'); setActiveTab('expenses'); }}
+                    className="p-3 rounded-lg bg-sky-500/10 border border-sky-500/20 hover:border-sky-500/40 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between text-xs text-sky-300 mb-1">
+                      <span className="font-semibold flex items-center gap-1.5">
+                        <Repeat size={13} /> Contínuas & Assinaturas
+                      </span>
+                      <span className="text-[10px] font-bold bg-sky-500/20 px-1.5 py-0.2 rounded">
+                        {frequencyBreakdown.recurring.percent}%
+                      </span>
+                    </div>
+                    <div className="text-lg font-bold text-white mt-1">
+                      {formatBRL(frequencyBreakdown.recurring.cents)}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">
+                      {frequencyBreakdown.recurring.count} assinatura(s) e contas fixas
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => { setExpenseFilter('installment'); setActiveTab('expenses'); }}
+                    className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 hover:border-amber-500/40 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between text-xs text-amber-300 mb-1">
+                      <span className="font-semibold flex items-center gap-1.5">
+                        <Layers size={13} /> Compras Parceladas
+                      </span>
+                      <span className="text-[10px] font-bold bg-amber-500/20 px-1.5 py-0.2 rounded">
+                        {frequencyBreakdown.installment.percent}%
+                      </span>
+                    </div>
+                    <div className="text-lg font-bold text-white mt-1">
+                      {formatBRL(frequencyBreakdown.installment.cents)}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">
+                      {frequencyBreakdown.installment.count} parcela(s) vigentes no ciclo
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => { setExpenseFilter('one_time'); setActiveTab('expenses'); }}
+                    className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between text-xs text-emerald-300 mb-1">
+                      <span className="font-semibold flex items-center gap-1.5">
+                        <CheckCircle2 size={13} /> Compras À Vista / Únicas
+                      </span>
+                      <span className="text-[10px] font-bold bg-emerald-500/20 px-1.5 py-0.2 rounded">
+                        {frequencyBreakdown.oneTime.percent}%
+                      </span>
+                    </div>
+                    <div className="text-lg font-bold text-white mt-1">
+                      {formatBRL(frequencyBreakdown.oneTime.cents)}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">
+                      {frequencyBreakdown.oneTime.count} gasto(s) pontuais no mês
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabelas Analíticas Detalhadas */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Tabela Analítica: Categorias */}
+                <div className="p-5 rounded-xl bg-dark-800/40 border border-white/5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold text-gray-200">Tabela Analítica por Categoria</h2>
+                    <span className="text-[11px] text-gray-500">{categoryBreakdown.length} categorias</span>
+                  </div>
+                  <div className="overflow-hidden rounded-lg border border-white/5">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/5 bg-white/[0.02] text-gray-400 text-[10px] uppercase tracking-wider">
+                          <th className="p-2.5">Categoria</th>
+                          <th className="p-2.5 text-center">Itens</th>
+                          <th className="p-2.5 text-right">Total</th>
+                          <th className="p-2.5 text-right">% Fatura</th>
+                          <th className="p-2.5 text-right">Média</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {categoryBreakdown.length === 0 ? (
+                          <tr>
+                            <td colSpan="5" className="p-4 text-center text-gray-500 text-xs">
+                              Sem lançamentos no período.
+                            </td>
+                          </tr>
+                        ) : (
+                          categoryBreakdown.map(cat => (
+                            <tr
+                              key={cat.id}
+                              onClick={() => handleFilterByCategory(cat.id)}
+                              className="hover:bg-white/[0.04] transition-colors cursor-pointer group"
+                              title={`Clique para ver despesas de ${cat.name}`}
+                            >
+                              <td className="p-2.5 font-medium text-gray-200">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
+                                  <span className="group-hover:text-emerald-300 transition-colors">{cat.name}</span>
+                                </div>
+                              </td>
+                              <td className="p-2.5 text-center text-gray-400">{cat.count}</td>
+                              <td className="p-2.5 text-right font-semibold text-rose-400">{formatBRL(cat.totalCents)}</td>
+                              <td className="p-2.5 text-right text-gray-300 font-medium">{cat.percentage}%</td>
+                              <td className="p-2.5 text-right text-gray-400">{formatBRL(cat.avgCents)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Tabela Analítica: Cartões e Contas */}
+                <div className="p-5 rounded-xl bg-dark-800/40 border border-white/5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold text-gray-200">Tabela Analítica por Forma de Pagamento</h2>
+                    <span className="text-[11px] text-gray-500">{cardBreakdown.length + accountBreakdown.length} meios</span>
+                  </div>
+                  <div className="overflow-hidden rounded-lg border border-white/5">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/5 bg-white/[0.02] text-gray-400 text-[10px] uppercase tracking-wider">
+                          <th className="p-2.5">Meio de Pagamento</th>
+                          <th className="p-2.5 text-center">Tipo</th>
+                          <th className="p-2.5 text-right">Gasto no Mês</th>
+                          <th className="p-2.5 text-right">Limite / Saldo</th>
+                          <th className="p-2.5 text-right">Uso</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {cardBreakdown.map(card => {
+                          const statusColor = card.usagePercent > 75 ? '#f43f5e' : card.usagePercent > 40 ? '#eab308' : '#10b981';
+                          return (
+                            <tr
+                              key={`card_${card.id}`}
+                              onClick={() => handleFilterByCard(card.id)}
+                              className="hover:bg-white/[0.04] transition-colors cursor-pointer group"
+                              title={`Clique para ver despesas do cartão ${card.name}`}
+                            >
+                              <td className="p-2.5 font-medium text-gray-200">
+                                <div className="flex items-center gap-1.5 group-hover:text-purple-300 transition-colors">
+                                  <CreditCard size={13} className="text-purple-400 shrink-0" />
+                                  <span className="truncate max-w-[120px]">{card.name}</span>
+                                </div>
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <span className="text-[10px] bg-purple-500/10 text-purple-300 px-1.5 py-0.5 rounded border border-purple-500/20">
+                                  Cartão
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-right font-semibold text-rose-400">{formatBRL(card.totalCents)}</td>
+                              <td className="p-2.5 text-right text-gray-400">{formatBRL(card.limitCents)}</td>
+                              <td className="p-2.5 text-right font-bold" style={{ color: statusColor }}>
+                                {card.usagePercent}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {accountBreakdown.map(acc => (
+                          <tr
+                            key={`acc_${acc.id}`}
+                            onClick={() => handleFilterByAccount(acc.id)}
+                            className="hover:bg-white/[0.04] transition-colors cursor-pointer group"
+                            title={`Clique para ver despesas da conta ${acc.name}`}
+                          >
+                            <td className="p-2.5 font-medium text-gray-200">
+                              <div className="flex items-center gap-1.5 group-hover:text-blue-300 transition-colors">
+                                <Wallet size={13} className="text-blue-400 shrink-0" />
+                                <span className="truncate max-w-[120px]">{acc.name}</span>
+                              </div>
+                            </td>
+                            <td className="p-2.5 text-center">
+                              <span className="text-[10px] bg-blue-500/10 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/20">
+                                Conta
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-right font-semibold text-rose-400">{formatBRL(acc.totalCents)}</td>
+                            <td className="p-2.5 text-right text-emerald-400 font-medium">{formatBRL(acc.balance_cents)}</td>
+                            <td className="p-2.5 text-right text-gray-500">-</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </div>
           )}
