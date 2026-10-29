@@ -1060,6 +1060,18 @@ export default function App() {
         const d = new Date(currentYear, currentMonthIdx + i, 1);
         targetMonths.push({ year: d.getFullYear(), monthIndex: d.getMonth() });
       }
+    } else if (annualMode === 'next24') {
+      // Próximos 24 meses (2 anos)
+      for (let i = 0; i < 24; i++) {
+        const d = new Date(currentYear, currentMonthIdx + i, 1);
+        targetMonths.push({ year: d.getFullYear(), monthIndex: d.getMonth() });
+      }
+    } else if (annualMode === 'next36') {
+      // Próximos 36 meses (3 anos)
+      for (let i = 0; i < 36; i++) {
+        const d = new Date(currentYear, currentMonthIdx + i, 1);
+        targetMonths.push({ year: d.getFullYear(), monthIndex: d.getMonth() });
+      }
     } else {
       // Últimos 12 meses (11 meses passados + Mês atual)
       for (let i = 11; i >= 0; i--) {
@@ -1171,12 +1183,13 @@ export default function App() {
       };
     });
 
+    const totalMonthsCount = calculatedMonths.length || 1;
     const annualTotalCents = calculatedMonths.reduce((acc, m) => acc + m.totalCents, 0);
-    const annualAverageCents = Math.round(annualTotalCents / 12);
+    const annualAverageCents = Math.round(annualTotalCents / totalMonthsCount);
     const maxMonth = [...calculatedMonths].sort((a, b) => b.totalCents - a.totalCents)[0] || calculatedMonths[0];
     const minMonth = [...calculatedMonths].sort((a, b) => a.totalCents - b.totalCents)[0] || calculatedMonths[0];
     const firstMonth = calculatedMonths[0];
-    const lastMonth = calculatedMonths[11];
+    const lastMonth = calculatedMonths[calculatedMonths.length - 1];
     const overallDiffCents = lastMonth ? (lastMonth.totalCents - firstMonth.totalCents) : 0;
     let overallDiffPercent = 0;
     if (firstMonth && firstMonth.totalCents > 0) {
@@ -1214,10 +1227,11 @@ export default function App() {
     const chartW = width - marginLeft - marginRight;
     const chartH = height - marginTop - marginBottom;
 
+    const count = months.length || 1;
     const maxVal = Math.max(...months.map(m => m.totalCents), 10000);
     const ceiling = Math.max(Math.ceil((maxVal * 1.25) / 10000) * 10000, 10000);
 
-    const getX = (idx) => marginLeft + (idx / 11) * chartW;
+    const getX = (idx) => marginLeft + (idx / Math.max(1, count - 1)) * chartW;
     const getY = (cents) => marginTop + (1 - (cents / ceiling)) * chartH;
 
     const points = months.map((m, idx) => ({
@@ -1333,16 +1347,16 @@ export default function App() {
           {points.map((pt, idx) => {
             const isHovered = hoveredAnnualMonth === idx;
             const isSelected = selectedAnnualMonth?.index === idx;
-            const barW = (chartW / 12) * 0.72;
+            const barW = Math.max(3, (chartW / count) * 0.72);
             const barX = pt.x - barW / 2;
             const barH = baseY - pt.y;
 
             return (
               <g key={`bar-${idx}`}>
                 <rect
-                  x={pt.x - chartW / 24}
+                  x={pt.x - chartW / (count * 2)}
                   y={marginTop}
-                  width={chartW / 12}
+                  width={chartW / count}
                   height={chartH + marginBottom}
                   fill={isHovered ? "rgba(255, 255, 255, 0.03)" : "transparent"}
                   className="cursor-pointer"
@@ -1447,27 +1461,34 @@ export default function App() {
                 <circle
                   cx={pt.x}
                   cy={pt.y}
-                  r={isHovered || isSelected ? 6.5 : isCurrent ? 5.5 : 4.5}
+                  r={isHovered || isSelected ? 6.5 : isCurrent ? 5.5 : count > 24 ? 3 : count > 12 ? 3.8 : 4.5}
                   fill={isHovered || isSelected ? '#ffffff' : isCurrent ? '#38bdf8' : isMax ? '#f97316' : '#10b981'}
                   stroke={isHovered || isSelected ? '#059669' : '#0f172a'}
                   strokeWidth="2"
                   className="transition-all duration-150"
                 />
 
-                <text
-                  x={pt.x}
-                  y={height - 18}
-                  textAnchor="middle"
-                  className={`text-[11px] font-semibold transition-colors ${
-                    isHovered || isSelected
-                      ? 'fill-emerald-300 font-bold'
-                      : isCurrent
-                      ? 'fill-sky-400 font-bold'
-                      : 'fill-gray-400'
-                  }`}
-                >
-                  {pt.m.shortLabel}
-                </text>
+                {(() => {
+                  const shouldShow = count <= 12 || (count <= 24 ? idx % 2 === 0 : idx % 3 === 0) || isCurrent || isHovered || isSelected;
+                  if (!shouldShow) return null;
+                  const labelText = count > 12 ? `${pt.m.shortLabel}/${String(pt.m.year).slice(2)}` : pt.m.shortLabel;
+                  return (
+                    <text
+                      x={pt.x}
+                      y={height - 18}
+                      textAnchor="middle"
+                      className={`text-[10px] font-semibold transition-colors ${
+                        isHovered || isSelected
+                          ? 'fill-emerald-300 font-bold'
+                          : isCurrent
+                          ? 'fill-sky-400 font-bold'
+                          : 'fill-gray-400'
+                      }`}
+                    >
+                      {labelText}
+                    </text>
+                  );
+                })()}
 
                 {isCurrent && (
                   <text
@@ -1650,7 +1671,7 @@ export default function App() {
             <DollarSign size={13} className="stroke-[2.5]" />
           </div>
           <span className="text-xs font-semibold tracking-wide text-gray-200">Cashpoint</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.5.0</span>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.5.1</span>
         </div>
 
         {/* Controles de Janela */}
@@ -1832,8 +1853,8 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Modos de Período de 1 Ano */}
-                <div className="flex items-center bg-dark-900/70 border border-white/10 rounded-lg p-1">
+                {/* Modos de Período */}
+                <div className="flex flex-wrap items-center bg-dark-900/70 border border-white/10 rounded-lg p-1 gap-0.5">
                   <button
                     onClick={() => setAnnualMode('calendar')}
                     className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
@@ -1842,7 +1863,7 @@ export default function App() {
                         : 'text-gray-400 hover:text-gray-200'
                     }`}
                   >
-                    Ano {annualYear} (Jan-Dez)
+                    Ano {annualYear}
                   </button>
                   <button
                     onClick={() => setAnnualMode('next12')}
@@ -1852,7 +1873,27 @@ export default function App() {
                         : 'text-gray-400 hover:text-gray-200'
                     }`}
                   >
-                    Próximos 12 Meses
+                    12 Meses
+                  </button>
+                  <button
+                    onClick={() => setAnnualMode('next24')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      annualMode === 'next24'
+                        ? 'bg-emerald-500 text-dark-900 shadow font-bold'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    24 Meses
+                  </button>
+                  <button
+                    onClick={() => setAnnualMode('next36')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      annualMode === 'next36'
+                        ? 'bg-emerald-500 text-dark-900 shadow font-bold'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    36 Meses
                   </button>
                   <button
                     onClick={() => setAnnualMode('past12')}
@@ -1862,7 +1903,7 @@ export default function App() {
                         : 'text-gray-400 hover:text-gray-200'
                     }`}
                   >
-                    Últimos 12 Meses
+                    Últimos 12M
                   </button>
                 </div>
               </div>
@@ -3100,14 +3141,14 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
                   <div className="flex items-center justify-between text-gray-400 mb-2">
-                    <span className="text-xs font-medium uppercase tracking-wider">Total Acumulado (1 Ano)</span>
+                    <span className="text-xs font-medium uppercase tracking-wider">Total Acumulado ({annualTimeline.months.length}M)</span>
                     <TrendingDown size={16} className="text-emerald-400" />
                   </div>
                   <div className="text-2xl font-bold text-white tracking-tight">
                     {formatBRL(annualTimeline.annualTotalCents)}
                   </div>
                   <div className="text-[11px] text-gray-400 mt-1 flex items-center justify-between">
-                    <span>Soma dos 12 meses</span>
+                    <span>Soma dos {annualTimeline.months.length} meses</span>
                     <span className="text-emerald-400 font-medium">100% projetado</span>
                   </div>
                 </div>
@@ -3163,11 +3204,13 @@ export default function App() {
                     </div>
                     <div>
                       <h2 className="text-base font-bold text-white tracking-tight">
-                        Variação do Valor Total ao Longo de 1 Ano
+                        Variação do Valor Total ({annualTimeline.months.length} Meses)
                       </h2>
                       <p className="text-xs text-gray-400">
                         {annualMode === 'calendar' && `Visualização de Janeiro a Dezembro de ${annualYear}.`}
                         {annualMode === 'next12' && 'Projeção dos próximos 12 meses a partir do mês atual.'}
+                        {annualMode === 'next24' && 'Projeção dos próximos 24 meses (2 anos) a partir do mês atual.'}
+                        {annualMode === 'next36' && 'Projeção dos próximos 36 meses (3 anos) a partir do mês atual.'}
                         {annualMode === 'past12' && 'Histórico dos últimos 12 meses até o mês atual.'}
                         {annualFilterTarget !== 'all' && ' (Filtrado por conta/cartão selecionado)'}
                       </p>
@@ -3194,12 +3237,12 @@ export default function App() {
                 {renderAnnualVariationChart()}
               </div>
 
-              {/* Matriz dos 12 Meses (Cards de Variação) */}
+              {/* Matriz dos Meses (Cards de Variação) */}
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
                     <CalendarRange size={16} className="text-emerald-400" />
-                    <span>Resumo Mês a Mês do Ano</span>
+                    <span>Resumo Mês a Mês ({annualTimeline.months.length} Meses)</span>
                   </h3>
                   <span className="text-xs text-gray-400">
                     Clique em um mês para visualizar o foco ou abrir sua fatura detalhada
@@ -3297,10 +3340,10 @@ export default function App() {
               <div className="p-4 rounded-xl bg-dark-800/40 border border-white/5 space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-200">
-                    Tabela Comparativa de Contas ao Longo do Ano
+                    Tabela Comparativa de Contas ({annualTimeline.months.length} Meses)
                   </h3>
                   <span className="text-xs text-gray-400">
-                    Consolidado de 12 meses
+                    Consolidado de {annualTimeline.months.length} meses
                   </span>
                 </div>
 
