@@ -30,7 +30,14 @@ import {
   ArrowUpDown,
   Percent,
   AlertCircle,
-  ShieldCheck
+  ShieldCheck,
+  TrendingUp,
+  LineChart,
+  CalendarRange,
+  ArrowUpRight,
+  ArrowDownRight,
+  Sparkles,
+  Activity
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 
@@ -120,6 +127,14 @@ export default function App() {
   const [searchFilter, setSearchFilter] = useState('');
   const [hoveredCategory, setHoveredCategory] = useState(null);
   const [monthOffset, setMonthOffset] = useState(0); // 0 = Mês atual, 1 = Próximo mês, -1 = Mês passado
+
+  // Estados para Variação Anual de Contas (1 Ano)
+  const [annualYear, setAnnualYear] = useState(() => new Date().getFullYear());
+  const [annualMode, setAnnualMode] = useState('calendar'); // 'calendar' | 'next12' | 'past12'
+  const [annualFilterTarget, setAnnualFilterTarget] = useState('all'); // 'all' | 'cards_only' | 'accounts_only' | `card:${id}` | `account:${id}`
+  const [hoveredAnnualMonth, setHoveredAnnualMonth] = useState(null);
+  const [selectedAnnualMonth, setSelectedAnnualMonth] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState({
     accounts: [],
@@ -1027,6 +1042,526 @@ export default function App() {
     }
   };
 
+  // Cálculo da linha do tempo e variação de contas ao longo de 1 ano (12 meses)
+  const annualTimeline = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonthIdx = now.getMonth();
+    const targetMonths = [];
+
+    if (annualMode === 'calendar') {
+      // 12 meses do ano selecionado (Janeiro a Dezembro)
+      for (let m = 0; m < 12; m++) {
+        targetMonths.push({ year: annualYear, monthIndex: m });
+      }
+    } else if (annualMode === 'next12') {
+      // Próximos 12 meses (Mês atual + 11 meses futuros)
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(currentYear, currentMonthIdx + i, 1);
+        targetMonths.push({ year: d.getFullYear(), monthIndex: d.getMonth() });
+      }
+    } else {
+      // Últimos 12 meses (11 meses passados + Mês atual)
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(currentYear, currentMonthIdx - i, 1);
+        targetMonths.push({ year: d.getFullYear(), monthIndex: d.getMonth() });
+      }
+    }
+
+    // Função interna para computar despesas de um mês específico { year, monthIndex }
+    const getMonthStats = (year, monthIndex) => {
+      let totalCents = 0;
+      let cardCents = 0;
+      let accountCents = 0;
+      let recurringCents = 0;
+      let installmentCents = 0;
+      let oneTimeCents = 0;
+      let itemsCount = 0;
+
+      for (const exp of overview.expenses) {
+        if (exp.is_active === 0) continue;
+
+        // Filtro de alvo (conta / cartão) se ativo
+        if (annualFilterTarget === 'cards_only' && exp.target_type !== 'card') continue;
+        if (annualFilterTarget === 'accounts_only' && exp.target_type !== 'account') continue;
+        if (annualFilterTarget.startsWith('card:') && (exp.target_type !== 'card' || String(exp.credit_card_id) !== annualFilterTarget.replace('card:', ''))) continue;
+        if (annualFilterTarget.startsWith('account:') && (exp.target_type !== 'account' || String(exp.account_id) !== annualFilterTarget.replace('account:', ''))) continue;
+
+        const comp = getExpenseCompetence(exp);
+        const diffMonths = (year - comp.year) * 12 + (monthIndex - comp.monthIndex);
+
+        let isIncluded = false;
+        let projInstallment = null;
+
+        if (exp.frequency_type === 'recurring') {
+          if (diffMonths >= 0) isIncluded = true;
+        } else if (exp.frequency_type === 'installment') {
+          if (diffMonths >= 0) {
+            const total = exp.total_installments || 1;
+            const baseInstallment = exp.current_installment || 1;
+            projInstallment = baseInstallment + diffMonths;
+            if (projInstallment <= total) {
+              isIncluded = true;
+            }
+          }
+        } else if (exp.frequency_type === 'one_time') {
+          if (diffMonths === 0) isIncluded = true;
+        }
+
+        if (isIncluded) {
+          const amt = exp.amount_cents || 0;
+          totalCents += amt;
+          itemsCount += 1;
+          if (exp.target_type === 'card') cardCents += amt;
+          if (exp.target_type === 'account') accountCents += amt;
+          if (exp.frequency_type === 'recurring') recurringCents += amt;
+          if (exp.frequency_type === 'installment') installmentCents += amt;
+          if (exp.frequency_type === 'one_time') oneTimeCents += amt;
+        }
+      }
+
+      return {
+        totalCents,
+        cardCents,
+        accountCents,
+        recurringCents,
+        installmentCents,
+        oneTimeCents,
+        itemsCount
+      };
+    };
+
+    const calculatedMonths = targetMonths.map((m, idx) => {
+      const stats = getMonthStats(m.year, m.monthIndex);
+
+      // Mês anterior (para computar variação exata)
+      const prevYear = m.monthIndex === 0 ? m.year - 1 : m.year;
+      const prevMonthIndex = m.monthIndex === 0 ? 11 : m.monthIndex - 1;
+      const prevStats = getMonthStats(prevYear, prevMonthIndex);
+
+      const diffCents = stats.totalCents - prevStats.totalCents;
+      let diffPercent = 0;
+      if (prevStats.totalCents > 0) {
+        diffPercent = Math.round(((stats.totalCents - prevStats.totalCents) / prevStats.totalCents) * 1000) / 10;
+      } else if (stats.totalCents > 0) {
+        diffPercent = 100;
+      }
+
+      const d = new Date(m.year, m.monthIndex, 1);
+      const rawShort = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+      const shortLabel = rawShort.charAt(0).toUpperCase() + rawShort.slice(1);
+      const rawFull = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+      const fullLabel = rawFull.charAt(0).toUpperCase() + rawFull.slice(1);
+
+      const isCurrent = m.year === currentYear && m.monthIndex === currentMonthIdx;
+      const offsetFromNow = (m.year - currentYear) * 12 + (m.monthIndex - currentMonthIdx);
+
+      return {
+        index: idx,
+        year: m.year,
+        monthIndex: m.monthIndex,
+        shortLabel,
+        fullLabel,
+        isCurrent,
+        offsetFromNow,
+        ...stats,
+        prevTotalCents: prevStats.totalCents,
+        diffCents,
+        diffPercent
+      };
+    });
+
+    const annualTotalCents = calculatedMonths.reduce((acc, m) => acc + m.totalCents, 0);
+    const annualAverageCents = Math.round(annualTotalCents / 12);
+    const maxMonth = [...calculatedMonths].sort((a, b) => b.totalCents - a.totalCents)[0] || calculatedMonths[0];
+    const minMonth = [...calculatedMonths].sort((a, b) => a.totalCents - b.totalCents)[0] || calculatedMonths[0];
+    const firstMonth = calculatedMonths[0];
+    const lastMonth = calculatedMonths[11];
+    const overallDiffCents = lastMonth ? (lastMonth.totalCents - firstMonth.totalCents) : 0;
+    let overallDiffPercent = 0;
+    if (firstMonth && firstMonth.totalCents > 0) {
+      overallDiffPercent = Math.round((overallDiffCents / firstMonth.totalCents) * 1000) / 10;
+    }
+
+    return {
+      months: calculatedMonths,
+      annualTotalCents,
+      annualAverageCents,
+      maxMonth,
+      minMonth,
+      firstMonth,
+      lastMonth,
+      overallDiffCents,
+      overallDiffPercent
+    };
+  }, [overview.expenses, annualYear, annualMode, annualFilterTarget]);
+
+  // Ação de navegação para a fatura de um mês da linha anual
+  const handleJumpToMonth = (offsetFromNow) => {
+    setMonthOffset(offsetFromNow);
+    setActiveTab('expenses');
+  };
+
+  // Renderizador do Gráfico de Variação Anual de Contas (SVG Nativo Interativo)
+  const renderAnnualVariationChart = () => {
+    const { months, annualAverageCents, maxMonth, minMonth } = annualTimeline;
+    const width = 880;
+    const height = 290;
+    const marginLeft = 75;
+    const marginRight = 35;
+    const marginTop = 30;
+    const marginBottom = 45;
+    const chartW = width - marginLeft - marginRight;
+    const chartH = height - marginTop - marginBottom;
+
+    const maxVal = Math.max(...months.map(m => m.totalCents), 10000);
+    const ceiling = Math.max(Math.ceil((maxVal * 1.25) / 10000) * 10000, 10000);
+
+    const getX = (idx) => marginLeft + (idx / 11) * chartW;
+    const getY = (cents) => marginTop + (1 - (cents / ceiling)) * chartH;
+
+    const points = months.map((m, idx) => ({
+      x: getX(idx),
+      y: getY(m.totalCents),
+      m
+    }));
+
+    const generateSmoothPath = (pts) => {
+      if (pts.length === 0) return '';
+      let d = `M ${pts[0].x} ${pts[0].y}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i === 0 ? i : i - 1];
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const p3 = pts[i + 2 < pts.length ? i + 2 : i + 1];
+        const cp1x = p1.x + (p2.x - p0.x) / 6;
+        const cp1y = p1.y + (p2.y - p0.y) / 6;
+        const cp2x = p2.x - (p3.x - p1.x) / 6;
+        const cp2y = p2.y - (p3.y - p1.y) / 6;
+        d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+      }
+      return d;
+    };
+
+    const linePath = generateSmoothPath(points);
+    const baseY = marginTop + chartH;
+    const areaPath = points.length > 0 ? `${linePath} L ${points[points.length - 1].x} ${baseY} L ${points[0].x} ${baseY} Z` : '';
+    const avgY = getY(annualAverageCents);
+    const yLevels = [0, 0.25, 0.5, 0.75, 1.0];
+
+    const activeMonthObj = hoveredAnnualMonth !== null ? months[hoveredAnnualMonth] : (selectedAnnualMonth || null);
+
+    return (
+      <div className="relative w-full overflow-hidden select-none">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-auto overflow-visible"
+        >
+          <defs>
+            <linearGradient id="annualAreaGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.32" />
+              <stop offset="70%" stopColor="#059669" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="#059669" stopOpacity="0.0" />
+            </linearGradient>
+
+            <linearGradient id="annualBarGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.20" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.03" />
+            </linearGradient>
+
+            <linearGradient id="annualBarHoverGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#34d399" stopOpacity="0.45" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.10" />
+            </linearGradient>
+
+            <filter id="annualGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#10b981" floodOpacity="0.5" />
+            </filter>
+          </defs>
+
+          {/* Gridlines Horizontais & Labels Y */}
+          {yLevels.map((lvl) => {
+            const val = Math.round(ceiling * lvl);
+            const y = getY(val);
+            return (
+              <g key={lvl}>
+                <line
+                  x1={marginLeft}
+                  y1={y}
+                  x2={width - marginRight}
+                  y2={y}
+                  stroke="rgba(255, 255, 255, 0.06)"
+                  strokeDasharray="4 4"
+                />
+                <text
+                  x={marginLeft - 12}
+                  y={y + 3.5}
+                  textAnchor="end"
+                  className="text-[10px] fill-gray-500 font-mono font-medium"
+                >
+                  {formatBRL(val)}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Linha da Média Anual */}
+          {annualAverageCents > 0 && (
+            <g>
+              <line
+                x1={marginLeft}
+                y1={avgY}
+                x2={width - marginRight}
+                y2={avgY}
+                stroke="#f59e0b"
+                strokeDasharray="5 4"
+                strokeWidth="1.5"
+                strokeOpacity="0.75"
+              />
+              <text
+                x={width - marginRight}
+                y={avgY - 6}
+                textAnchor="end"
+                className="text-[10px] fill-amber-400 font-semibold font-mono"
+              >
+                Média Anual: {formatBRL(annualAverageCents)}
+              </text>
+            </g>
+          )}
+
+          {/* Barras de Fundo Proporcionais por Mês */}
+          {points.map((pt, idx) => {
+            const isHovered = hoveredAnnualMonth === idx;
+            const isSelected = selectedAnnualMonth?.index === idx;
+            const barW = (chartW / 12) * 0.72;
+            const barX = pt.x - barW / 2;
+            const barH = baseY - pt.y;
+
+            return (
+              <g key={`bar-${idx}`}>
+                <rect
+                  x={pt.x - chartW / 24}
+                  y={marginTop}
+                  width={chartW / 12}
+                  height={chartH + marginBottom}
+                  fill={isHovered ? "rgba(255, 255, 255, 0.03)" : "transparent"}
+                  className="cursor-pointer"
+                  onMouseEnter={() => setHoveredAnnualMonth(idx)}
+                  onMouseLeave={() => setHoveredAnnualMonth(null)}
+                  onClick={() => setSelectedAnnualMonth(pt.m)}
+                />
+
+                <rect
+                  x={barX}
+                  y={pt.y}
+                  width={barW}
+                  height={Math.max(4, barH)}
+                  rx="4"
+                  fill={isHovered || isSelected ? "url(#annualBarHoverGradient)" : "url(#annualBarGradient)"}
+                  stroke={isHovered || isSelected ? "#34d399" : "rgba(16, 185, 129, 0.25)"}
+                  strokeWidth={isHovered || isSelected ? "1.5" : "1"}
+                  className="transition-all duration-150 pointer-events-none"
+                />
+              </g>
+            );
+          })}
+
+          {/* Área com Gradiente */}
+          {areaPath && (
+            <path
+              d={areaPath}
+              fill="url(#annualAreaGradient)"
+              className="pointer-events-none transition-all duration-300"
+            />
+          )}
+
+          {/* Linha Curva de Variação Anual */}
+          {linePath && (
+            <path
+              d={linePath}
+              fill="none"
+              stroke="#10b981"
+              strokeWidth="3.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              filter="url(#annualGlow)"
+              className="pointer-events-none"
+            />
+          )}
+
+          {/* Linha Vertical no Mês em Hover */}
+          {hoveredAnnualMonth !== null && points[hoveredAnnualMonth] && (
+            <line
+              x1={points[hoveredAnnualMonth].x}
+              y1={marginTop}
+              x2={points[hoveredAnnualMonth].x}
+              y2={baseY}
+              stroke="#34d399"
+              strokeWidth="1.5"
+              strokeDasharray="3 3"
+              strokeOpacity="0.8"
+              className="pointer-events-none"
+            />
+          )}
+
+          {/* Marcadores / Pontos de Dados */}
+          {points.map((pt, idx) => {
+            const isHovered = hoveredAnnualMonth === idx;
+            const isSelected = selectedAnnualMonth?.index === idx;
+            const isCurrent = pt.m.isCurrent;
+            const isMax = pt.m.totalCents === maxMonth.totalCents && pt.m.totalCents > 0;
+
+            return (
+              <g
+                key={`point-${idx}`}
+                className="cursor-pointer"
+                onMouseEnter={() => setHoveredAnnualMonth(idx)}
+                onMouseLeave={() => setHoveredAnnualMonth(null)}
+                onClick={() => setSelectedAnnualMonth(pt.m)}
+              >
+                {(isHovered || isSelected) && (
+                  <circle
+                    cx={pt.x}
+                    cy={pt.y}
+                    r="12"
+                    fill="none"
+                    stroke="#34d399"
+                    strokeWidth="2"
+                    strokeOpacity="0.6"
+                    className="animate-pulse"
+                  />
+                )}
+
+                {isCurrent && !isHovered && !isSelected && (
+                  <circle
+                    cx={pt.x}
+                    cy={pt.y}
+                    r="9"
+                    fill="none"
+                    stroke="#38bdf8"
+                    strokeWidth="1.8"
+                    strokeOpacity="0.8"
+                  />
+                )}
+
+                <circle
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={isHovered || isSelected ? 6.5 : isCurrent ? 5.5 : 4.5}
+                  fill={isHovered || isSelected ? '#ffffff' : isCurrent ? '#38bdf8' : isMax ? '#f97316' : '#10b981'}
+                  stroke={isHovered || isSelected ? '#059669' : '#0f172a'}
+                  strokeWidth="2"
+                  className="transition-all duration-150"
+                />
+
+                <text
+                  x={pt.x}
+                  y={height - 18}
+                  textAnchor="middle"
+                  className={`text-[11px] font-semibold transition-colors ${
+                    isHovered || isSelected
+                      ? 'fill-emerald-300 font-bold'
+                      : isCurrent
+                      ? 'fill-sky-400 font-bold'
+                      : 'fill-gray-400'
+                  }`}
+                >
+                  {pt.m.shortLabel}
+                </text>
+
+                {isCurrent && (
+                  <text
+                    x={pt.x}
+                    y={height - 4}
+                    textAnchor="middle"
+                    className="text-[9px] fill-sky-400 font-bold uppercase tracking-wider"
+                  >
+                    Hoje
+                  </text>
+                )}
+                {isMax && !isCurrent && (
+                  <text
+                    x={pt.x}
+                    y={height - 4}
+                    textAnchor="middle"
+                    className="text-[8px] fill-orange-400 font-bold uppercase tracking-wider"
+                  >
+                    Pico
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+
+        {/* Tooltip Interativo Flutuante */}
+        {activeMonthObj && (
+          <div className="mt-3 p-3.5 rounded-xl bg-dark-800/90 border border-emerald-500/30 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <CalendarRange size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-bold text-white">{activeMonthObj.fullLabel}</h4>
+                  {activeMonthObj.isCurrent && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                      Mês Atual
+                    </span>
+                  )}
+                  {activeMonthObj.totalCents === maxMonth.totalCents && activeMonthObj.totalCents > 0 && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 border border-orange-500/30">
+                      Maior Valor do Ano
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 text-xs text-gray-400 mt-1">
+                  <span>Cartões: <strong className="text-purple-300 font-semibold">{formatBRL(activeMonthObj.cardCents)}</strong></span>
+                  <span>•</span>
+                  <span>Débito/Contas: <strong className="text-blue-300 font-semibold">{formatBRL(activeMonthObj.accountCents)}</strong></span>
+                  <span>•</span>
+                  <span>{activeMonthObj.itemsCount} lançamento(s) ativo(s)</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block">Total do Mês</span>
+                <span className="text-lg font-bold text-white tracking-tight">{formatBRL(activeMonthObj.totalCents)}</span>
+                
+                <div className="flex items-center justify-end gap-1 mt-0.5 text-xs font-semibold">
+                  {activeMonthObj.diffCents > 0 ? (
+                    <span className="text-rose-400 flex items-center gap-0.5" title="Aumento em relação ao mês anterior">
+                      <ArrowUpRight size={13} />
+                      +{formatBRL(activeMonthObj.diffCents)} (+{activeMonthObj.diffPercent}%)
+                    </span>
+                  ) : activeMonthObj.diffCents < 0 ? (
+                    <span className="text-emerald-400 flex items-center gap-0.5" title="Redução em relação ao mês anterior">
+                      <ArrowDownRight size={13} />
+                      {formatBRL(activeMonthObj.diffCents)} ({activeMonthObj.diffPercent}%)
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">Estável (0%)</span>
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={() => handleJumpToMonth(activeMonthObj.offsetFromNow)}
+                className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-md shrink-0"
+                title={`Ir para despesas de ${activeMonthObj.fullLabel}`}
+              >
+                <span>Ver Fatura</span>
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Renderizador do Gráfico de Rosca (Donut SVG Puro)
   const renderDonut = (size = 180, strokeWidth = 18) => {
     const r = (size - strokeWidth) / 2;
@@ -1115,7 +1650,7 @@ export default function App() {
             <DollarSign size={13} className="stroke-[2.5]" />
           </div>
           <span className="text-xs font-semibold tracking-wide text-gray-200">Cashpoint</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.4.0</span>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.5.0</span>
         </div>
 
         {/* Controles de Janela */}
@@ -1186,6 +1721,18 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('annual')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'annual'
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+              }`}
+            >
+              <TrendingUp size={17} />
+              <span>Variação Anual</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('accounts')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === 'accounts'
@@ -1226,12 +1773,14 @@ export default function App() {
                 {activeTab === 'overview' && 'Painel Financeiro'}
                 {activeTab === 'expenses' && 'Despesas & Faturas'}
                 {activeTab === 'reports' && 'Gráficos & Análises Financeiras'}
+                {activeTab === 'annual' && 'Variação Anual de Contas'}
                 {activeTab === 'accounts' && 'Minhas Contas, Cartões & Categorias'}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
                 {activeTab === 'overview' && `Projeções e fechamento de contas para ${monthLabel}.`}
                 {activeTab === 'expenses' && `Lançamentos, assinaturas e parcelas vigentes em ${monthLabel}.`}
                 {activeTab === 'reports' && `Visão analítica por categorias, faturas de cartões e tabelas de ${monthLabel}.`}
+                {activeTab === 'annual' && 'Evolução e projeção do valor total das contas ao longo de 1 ano (12 meses).'}
                 {activeTab === 'accounts' && 'Gerencie limites, dias de vencimento, saldos e categorias personalizadas.'}
               </p>
             </div>
@@ -1247,75 +1796,187 @@ export default function App() {
             </div>
           </div>
 
-          {/* --- NAVEGADOR DE MÊS ESTILO AXIES --- */}
-          <div className="p-3.5 mb-6 rounded-xl bg-dark-800/50 border border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            {/* Controles Principais de Mês */}
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setMonthOffset(prev => prev - 1)}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
-                title="Mês Anterior"
-              >
-                <ChevronLeft size={16} />
-              </button>
+          {/* --- NAVEGADOR DE CONTROLE: ANUAL vs MENSAL --- */}
+          {activeTab === 'annual' ? (
+            <div className="p-3.5 mb-6 rounded-xl bg-dark-800/50 border border-white/5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              {/* Controles de Ano e Modo */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                {annualMode === 'calendar' && (
+                  <div className="flex items-center gap-1.5 bg-dark-900/70 border border-white/10 rounded-lg p-1">
+                    <button
+                      onClick={() => setAnnualYear(prev => prev - 1)}
+                      className="p-1 rounded bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+                      title="Ano Anterior"
+                    >
+                      <ChevronLeft size={15} />
+                    </button>
+                    <span className="px-2 py-0.5 text-xs font-bold text-white tracking-wide">
+                      {annualYear}
+                    </span>
+                    <button
+                      onClick={() => setAnnualYear(prev => prev + 1)}
+                      className="p-1 rounded bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+                      title="Próximo Ano"
+                    >
+                      <ChevronRight size={15} />
+                    </button>
+                    {annualYear !== new Date().getFullYear() && (
+                      <button
+                        onClick={() => setAnnualYear(new Date().getFullYear())}
+                        className="px-2 py-0.5 text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold hover:underline"
+                        title="Voltar ao ano atual"
+                      >
+                        Ano Atual
+                      </button>
+                    )}
+                  </div>
+                )}
 
-              <div className="flex items-center gap-2.5">
-                <Calendar size={16} className="text-emerald-400" />
-                <span className="text-sm font-bold text-white tracking-wide">
-                  {monthLabel}
-                </span>
-
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
-                    monthOffset === 0
-                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                      : 'bg-primary-500/15 text-sky-400 border-sky-500/30'
-                  }`}
-                >
-                  {monthOffset === 0
-                    ? 'MÊS ATUAL'
-                    : monthOffset > 0
-                    ? `+${monthOffset} MÊS${monthOffset > 1 ? 'ES' : ''}`
-                    : `${monthOffset} MÊS${monthOffset < -1 ? 'ES' : ''}`}
-                </span>
-
-                {monthOffset !== 0 && (
+                {/* Modos de Período de 1 Ano */}
+                <div className="flex items-center bg-dark-900/70 border border-white/10 rounded-lg p-1">
                   <button
-                    onClick={() => setMonthOffset(0)}
-                    className="p-1 text-gray-400 hover:text-emerald-400 transition-colors"
-                    title="Voltar ao Mês Atual"
+                    onClick={() => setAnnualMode('calendar')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      annualMode === 'calendar'
+                        ? 'bg-emerald-500 text-dark-900 shadow font-bold'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
                   >
-                    <RotateCcw size={14} />
+                    Ano {annualYear} (Jan-Dez)
+                  </button>
+                  <button
+                    onClick={() => setAnnualMode('next12')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      annualMode === 'next12'
+                        ? 'bg-emerald-500 text-dark-900 shadow font-bold'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Próximos 12 Meses
+                  </button>
+                  <button
+                    onClick={() => setAnnualMode('past12')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                      annualMode === 'past12'
+                        ? 'bg-emerald-500 text-dark-900 shadow font-bold'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Últimos 12 Meses
+                  </button>
+                </div>
+              </div>
+
+              {/* Filtro de Contas / Cartões */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400 font-medium flex items-center gap-1.5 shrink-0">
+                  <Filter size={13} className="text-emerald-400" />
+                  Conta/Cartão:
+                </span>
+                <select
+                  value={annualFilterTarget}
+                  onChange={e => setAnnualFilterTarget(e.target.value)}
+                  className="bg-dark-900/80 border border-white/10 text-gray-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="all">Todas as Contas & Cartões (Total Geral)</option>
+                  <option value="cards_only">Somente Faturas de Cartões de Crédito</option>
+                  <option value="accounts_only">Somente Débitos / Contas Bancárias</option>
+                  {overview.creditCards.length > 0 && (
+                    <optgroup label="Cartões de Crédito Individuais">
+                      {overview.creditCards.map(c => (
+                        <option key={`c-${c.id}`} value={`card:${c.id}`}>Cartão: {c.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {overview.accounts.length > 0 && (
+                    <optgroup label="Contas Bancárias Individuais">
+                      {overview.accounts.map(a => (
+                        <option key={`a-${a.id}`} value={`account:${a.id}`}>Conta: {a.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                {annualFilterTarget !== 'all' && (
+                  <button
+                    onClick={() => setAnnualFilterTarget('all')}
+                    className="p-1 text-gray-400 hover:text-rose-400 transition-colors"
+                    title="Limpar filtro"
+                  >
+                    <X size={14} />
                   </button>
                 )}
               </div>
-
-              <button
-                onClick={() => setMonthOffset(prev => prev + 1)}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
-                title="Próximo Mês"
-              >
-                <ChevronRight size={16} />
-              </button>
             </div>
-
-            {/* Pílulas Rápidas de Navegação */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-              {quickMonths.map(m => (
+          ) : (
+            <div className="p-3.5 mb-6 rounded-xl bg-dark-800/50 border border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Controles Principais de Mês */}
+              <div className="flex items-center gap-3">
                 <button
-                  key={m.offset}
-                  onClick={() => setMonthOffset(m.offset)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors border ${
-                    monthOffset === m.offset
-                      ? 'bg-emerald-500 text-dark-900 border-emerald-500 shadow-md font-bold'
-                      : 'bg-white/5 text-gray-400 hover:text-gray-200 border-transparent hover:bg-white/10'
-                  }`}
+                  onClick={() => setMonthOffset(prev => prev - 1)}
+                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+                  title="Mês Anterior"
                 >
-                  {m.label}
+                  <ChevronLeft size={16} />
                 </button>
-              ))}
+
+                <div className="flex items-center gap-2.5">
+                  <Calendar size={16} className="text-emerald-400" />
+                  <span className="text-sm font-bold text-white tracking-wide">
+                    {monthLabel}
+                  </span>
+
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                      monthOffset === 0
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                        : 'bg-primary-500/15 text-sky-400 border-sky-500/30'
+                    }`}
+                  >
+                    {monthOffset === 0
+                      ? 'MÊS ATUAL'
+                      : monthOffset > 0
+                      ? `+${monthOffset} MÊS${monthOffset > 1 ? 'ES' : ''}`
+                      : `${monthOffset} MÊS${monthOffset < -1 ? 'ES' : ''}`}
+                  </span>
+
+                  {monthOffset !== 0 && (
+                    <button
+                      onClick={() => setMonthOffset(0)}
+                      className="p-1 text-gray-400 hover:text-emerald-400 transition-colors"
+                      title="Voltar ao Mês Atual"
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => setMonthOffset(prev => prev + 1)}
+                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
+                  title="Próximo Mês"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+
+              {/* Pílulas Rápidas de Navegação */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+                {quickMonths.map(m => (
+                  <button
+                    key={m.offset}
+                    onClick={() => setMonthOffset(m.offset)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors border ${
+                      monthOffset === m.offset
+                        ? 'bg-emerald-500 text-dark-900 border-emerald-500 shadow-md font-bold'
+                        : 'bg-white/5 text-gray-400 hover:text-gray-200 border-transparent hover:bg-white/10'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* VIEW: VISÃO GERAL */}
           {activeTab === 'overview' && (
@@ -1641,6 +2302,34 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {/* Widget de Variação Anual no Overview */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/10 via-dark-800/60 to-dark-800/40 border border-emerald-500/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                    <TrendingUp size={20} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-white">Variação Anual de Contas</h3>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">
+                        12 Meses
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Gasto médio anual de <strong className="text-emerald-400 font-semibold">{formatBRL(annualTimeline.annualAverageCents)}/mês</strong>. Mês de maior impacto: <strong className="text-rose-400 font-semibold">{annualTimeline.maxMonth?.shortLabel} ({formatBRL(annualTimeline.maxMonth?.totalCents)})</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setActiveTab('annual')}
+                  className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-dark-900 font-bold text-xs transition-colors flex items-center gap-1.5 shrink-0 shadow-lg shadow-emerald-950/30"
+                >
+                  <span>Ver Gráfico de Variação de 1 Ano</span>
+                  <ChevronRight size={14} />
+                </button>
+              </div>
             </div>
           )}
 
@@ -1956,6 +2645,26 @@ export default function App() {
           {/* VIEW: RELATÓRIOS & GRÁFICOS */}
           {activeTab === 'reports' && (
             <div className="space-y-6">
+              {/* Banner de atalho para Variação Anual */}
+              <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/10 via-dark-800/80 to-dark-800/40 border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400">
+                    <TrendingUp size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">Visualização de Longo Prazo: Variação Anual de Contas</h4>
+                    <p className="text-xs text-gray-400">Veja o gráfico de evolução e a variação das contas ao longo de 1 ano completo (12 meses).</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveTab('annual')}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-dark-900 font-bold text-xs transition-colors flex items-center gap-1.5 shrink-0"
+                >
+                  <span>Abrir Gráfico de 1 Ano</span>
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+
               {/* KPIs Analíticos */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
@@ -2379,6 +3088,308 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: VARIAÇÃO ANUAL DE CONTAS (1 ANO) */}
+          {activeTab === 'annual' && (
+            <div className="space-y-6">
+              {/* KPIs Anuais */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Total Acumulado (1 Ano)</span>
+                    <TrendingDown size={16} className="text-emerald-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-white tracking-tight">
+                    {formatBRL(annualTimeline.annualTotalCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1 flex items-center justify-between">
+                    <span>Soma dos 12 meses</span>
+                    <span className="text-emerald-400 font-medium">100% projetado</span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Média Mensal</span>
+                    <Activity size={16} className="text-amber-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-amber-400 tracking-tight">
+                    {formatBRL(annualTimeline.annualAverageCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    Custo médio mensal projetado
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Mês Mais Alto (Pico)</span>
+                    <ArrowUpRight size={16} className="text-rose-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-rose-400 tracking-tight">
+                    {formatBRL(annualTimeline.maxMonth?.totalCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1 flex items-center justify-between">
+                    <span className="truncate max-w-[140px]">{annualTimeline.maxMonth?.fullLabel}</span>
+                    <span className="text-rose-400 font-semibold">Maior volume</span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Menor Mês (Mínima)</span>
+                    <ArrowDownRight size={16} className="text-sky-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-sky-400 tracking-tight">
+                    {formatBRL(annualTimeline.minMonth?.totalCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1 flex items-center justify-between">
+                    <span className="truncate max-w-[140px]">{annualTimeline.minMonth?.fullLabel}</span>
+                    <span className="text-sky-400 font-semibold">Mais econômico</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card Principal com o Gráfico de Variação Anual */}
+              <div className="p-5 rounded-xl bg-dark-800/40 border border-white/5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-white/5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      <LineChart size={18} />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-bold text-white tracking-tight">
+                        Variação do Valor Total ao Longo de 1 Ano
+                      </h2>
+                      <p className="text-xs text-gray-400">
+                        {annualMode === 'calendar' && `Visualização de Janeiro a Dezembro de ${annualYear}.`}
+                        {annualMode === 'next12' && 'Projeção dos próximos 12 meses a partir do mês atual.'}
+                        {annualMode === 'past12' && 'Histórico dos últimos 12 meses até o mês atual.'}
+                        {annualFilterTarget !== 'all' && ' (Filtrado por conta/cartão selecionado)'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shadow-sm shadow-emerald-500/50" />
+                      <span className="text-gray-300 font-medium">Fatura Total</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-3.5 h-0.5 border-t-2 border-dashed border-amber-400 inline-block" />
+                      <span className="text-gray-300 font-medium">Média Anual</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block" />
+                      <span className="text-gray-300 font-medium">Mês Atual</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Renderização do SVG */}
+                {renderAnnualVariationChart()}
+              </div>
+
+              {/* Matriz dos 12 Meses (Cards de Variação) */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+                    <CalendarRange size={16} className="text-emerald-400" />
+                    <span>Resumo Mês a Mês do Ano</span>
+                  </h3>
+                  <span className="text-xs text-gray-400">
+                    Clique em um mês para visualizar o foco ou abrir sua fatura detalhada
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                  {annualTimeline.months.map((m) => {
+                    const isSelected = selectedAnnualMonth?.index === m.index;
+                    const isHovered = hoveredAnnualMonth === m.index;
+                    const isMax = m.totalCents === annualTimeline.maxMonth?.totalCents && m.totalCents > 0;
+                    const peakRatio = annualTimeline.maxMonth?.totalCents > 0 ? (m.totalCents / annualTimeline.maxMonth.totalCents) * 100 : 0;
+
+                    return (
+                      <div
+                        key={m.index}
+                        onClick={() => setSelectedAnnualMonth(m)}
+                        onMouseEnter={() => setHoveredAnnualMonth(m.index)}
+                        onMouseLeave={() => setHoveredAnnualMonth(null)}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                          isSelected
+                            ? 'bg-emerald-500/15 border-emerald-500/40 shadow-lg shadow-emerald-950/30'
+                            : isHovered
+                            ? 'bg-white/5 border-white/20'
+                            : 'bg-dark-800/40 border-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className={`text-xs font-bold ${m.isCurrent ? 'text-sky-400' : 'text-gray-200'}`}>
+                              {m.shortLabel}/{String(m.year).slice(2)}
+                            </span>
+                            {m.isCurrent && (
+                              <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.2 rounded font-bold">
+                                Hoje
+                              </span>
+                            )}
+                            {isMax && !m.isCurrent && (
+                              <span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.2 rounded font-bold">
+                                Pico
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="text-sm font-bold text-white tracking-tight mb-1">
+                            {formatBRL(m.totalCents)}
+                          </div>
+
+                          {/* Variação vs Mês Anterior */}
+                          <div className="text-[11px] font-semibold mb-2">
+                            {m.diffCents > 0 ? (
+                              <span className="text-rose-400 flex items-center gap-0.5">
+                                <ArrowUpRight size={11} />
+                                +{m.diffPercent}%
+                              </span>
+                            ) : m.diffCents < 0 ? (
+                              <span className="text-emerald-400 flex items-center gap-0.5">
+                                <ArrowDownRight size={11} />
+                                {m.diffPercent}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">0.0%</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          {/* Mini Barra relativa ao pico */}
+                          <div className="w-full h-1 bg-dark-900 rounded-full overflow-hidden mb-2">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                isMax ? 'bg-orange-400' : m.isCurrent ? 'bg-sky-400' : 'bg-emerald-500'
+                              }`}
+                              style={{ width: `${Math.min(100, Math.max(5, peakRatio))}%` }}
+                            />
+                          </div>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleJumpToMonth(m.offsetFromNow);
+                            }}
+                            className="w-full text-center py-1 text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded transition-colors"
+                          >
+                            Abrir Fatura →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Tabela Analítica de Variação Mensal */}
+              <div className="p-4 rounded-xl bg-dark-800/40 border border-white/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-gray-200">
+                    Tabela Comparativa de Contas ao Longo do Ano
+                  </h3>
+                  <span className="text-xs text-gray-400">
+                    Consolidado de 12 meses
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-white/5 text-gray-400 uppercase font-semibold text-[10px] tracking-wider">
+                        <th className="p-2.5">Mês</th>
+                        <th className="p-2.5 text-right">Valor Total</th>
+                        <th className="p-2.5 text-right">Variação (vs Anterior)</th>
+                        <th className="p-2.5 text-right">Faturas de Cartão</th>
+                        <th className="p-2.5 text-right">Débitos em Conta</th>
+                        <th className="p-2.5 text-center">Lançamentos</th>
+                        <th className="p-2.5 text-right">Proporção Anual</th>
+                        <th className="p-2.5 text-center">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {annualTimeline.months.map((m) => {
+                        const isMax = m.totalCents === annualTimeline.maxMonth?.totalCents && m.totalCents > 0;
+                        const isMin = m.totalCents === annualTimeline.minMonth?.totalCents && m.totalCents > 0 && annualTimeline.maxMonth?.totalCents !== annualTimeline.minMonth?.totalCents;
+                        const annualShare = annualTimeline.annualTotalCents > 0 ? ((m.totalCents / annualTimeline.annualTotalCents) * 100).toFixed(1) : '0.0';
+
+                        return (
+                          <tr
+                            key={m.index}
+                            className={`hover:bg-white/5 transition-colors ${m.isCurrent ? 'bg-sky-500/5' : ''}`}
+                          >
+                            <td className="p-2.5 font-medium text-gray-200 flex items-center gap-2">
+                              <span>{m.fullLabel}</span>
+                              {m.isCurrent && (
+                                <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded font-bold">
+                                  Hoje
+                                </span>
+                              )}
+                              {isMax && (
+                                <span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">
+                                  Pico
+                                </span>
+                              )}
+                              {isMin && (
+                                <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-bold">
+                                  Mínima
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2.5 text-right font-bold text-white font-mono">
+                              {formatBRL(m.totalCents)}
+                            </td>
+                            <td className="p-2.5 text-right font-semibold">
+                              {m.diffCents > 0 ? (
+                                <span className="text-rose-400 font-mono inline-flex items-center gap-0.5">
+                                  <ArrowUpRight size={12} />
+                                  +{formatBRL(m.diffCents)} (+{m.diffPercent}%)
+                                </span>
+                              ) : m.diffCents < 0 ? (
+                                <span className="text-emerald-400 font-mono inline-flex items-center gap-0.5">
+                                  <ArrowDownRight size={12} />
+                                  {formatBRL(m.diffCents)} ({m.diffPercent}%)
+                                </span>
+                              ) : (
+                                <span className="text-gray-500 font-mono">Estável</span>
+                              )}
+                            </td>
+                            <td className="p-2.5 text-right text-purple-300 font-medium font-mono">
+                              {formatBRL(m.cardCents)}
+                            </td>
+                            <td className="p-2.5 text-right text-blue-300 font-medium font-mono">
+                              {formatBRL(m.accountCents)}
+                            </td>
+                            <td className="p-2.5 text-center text-gray-400">
+                              {m.itemsCount}
+                            </td>
+                            <td className="p-2.5 text-right text-gray-300 font-medium">
+                              {annualShare}%
+                            </td>
+                            <td className="p-2.5 text-center">
+                              <button
+                                onClick={() => handleJumpToMonth(m.offsetFromNow)}
+                                className="px-2.5 py-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded transition-colors"
+                              >
+                                Ver Mês →
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
