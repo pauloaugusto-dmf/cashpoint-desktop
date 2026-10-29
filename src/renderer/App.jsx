@@ -84,6 +84,26 @@ const formatCompetenceLabel = (yearMonthStr) => {
   return name.charAt(0).toUpperCase() + name.slice(1);
 };
 
+// Paleta de cores padrão para categorias
+const PRESET_CATEGORY_COLORS = [
+  '#f97316', // Laranja
+  '#fb923c', // Laranja Claro
+  '#eab308', // Amarelo
+  '#84cc16', // Lima
+  '#10b981', // Esmeralda
+  '#14b8a6', // Teal
+  '#06b6d4', // Ciano
+  '#3b82f6', // Azul
+  '#6366f1', // Índigo
+  '#8b5cf6', // Violeta
+  '#a855f7', // Roxo
+  '#d946ef', // Fúcsia
+  '#ec4899', // Rosa
+  '#f43f5e', // Rose
+  '#64748b', // Ardósia
+  '#6b7280'  // Cinza
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [expenseFilter, setExpenseFilter] = useState('all'); // 'all' | 'recurring' | 'installment' | 'one_time'
@@ -100,15 +120,19 @@ export default function App() {
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showCardModal, setShowCardModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
 
   // Estados de Edição
   const [editingAccount, setEditingAccount] = useState(null);
   const [editingCard, setEditingCard] = useState(null);
   const [editingExpense, setEditingExpense] = useState(null);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [categoryModalReturnToExpense, setCategoryModalReturnToExpense] = useState(false);
 
   // Forms
   const [accountForm, setAccountForm] = useState({ name: '', balance_reais: '' });
   const [cardForm, setCardForm] = useState({ name: '', limit_reais: '', closing_day: 1, due_day: 10 });
+  const [categoryForm, setCategoryForm] = useState({ name: '', color: '#10b981' });
   const [expenseForm, setExpenseForm] = useState({
     description: '',
     amount_reais: '',
@@ -145,9 +169,21 @@ export default function App() {
           ],
           categories: [
             { id: 1, name: 'Alimentação', color: '#f97316' },
-            { id: 2, name: 'Moradia / Serviços', color: '#3b82f6' },
-            { id: 3, name: 'Assinaturas & Lazer', color: '#8b5cf6' },
-            { id: 4, name: 'Eletrônicos', color: '#10b981' }
+            { id: 2, name: 'Supermercado', color: '#fb923c' },
+            { id: 3, name: 'Moradia & Contas', color: '#3b82f6' },
+            { id: 4, name: 'Transporte & Combustível', color: '#eab308' },
+            { id: 5, name: 'Saúde & Farmácia', color: '#10b981' },
+            { id: 6, name: 'Educação & Cursos', color: '#06b6d4' },
+            { id: 7, name: 'Lazer & Viagens', color: '#8b5cf6' },
+            { id: 8, name: 'Assinaturas & Streaming', color: '#a855f7' },
+            { id: 9, name: 'Compras & Eletrônicos', color: '#6366f1' },
+            { id: 10, name: 'Vestuário & Cuidados', color: '#ec4899' },
+            { id: 11, name: 'Pets', color: '#14b8a6' },
+            { id: 12, name: 'Investimentos & Reserva', color: '#22c55e' },
+            { id: 13, name: 'Trabalho & Negócios', color: '#84cc16' },
+            { id: 14, name: 'Presentes & Doações', color: '#d946ef' },
+            { id: 15, name: 'Serviços Financeiros', color: '#64748b' },
+            { id: 16, name: 'Outros', color: '#6b7280' }
           ],
           expenses: [
             { id: 1, description: 'Internet Fibra', amount_cents: 11990, frequency_type: 'recurring', due_day: 15, is_active: 1, target_type: 'account', account_name: 'Nubank Principal', category_name: 'Moradia / Serviços', category_color: '#3b82f6', is_paid: 1, competence_month: formatYearMonth(now), created_at: dateStr },
@@ -455,6 +491,85 @@ export default function App() {
     }
   };
 
+  // Ações de Categorias
+  const handleOpenAddCategory = (fromExpense = false) => {
+    setEditingCategory(null);
+    setCategoryForm({ name: '', color: '#10b981' });
+    setCategoryModalReturnToExpense(fromExpense);
+    setShowCategoryModal(true);
+  };
+
+  const handleOpenEditCategory = (cat) => {
+    setEditingCategory(cat);
+    setCategoryForm({ name: cat.name, color: cat.color || '#6b7280' });
+    setCategoryModalReturnToExpense(false);
+    setShowCategoryModal(true);
+  };
+
+  const handleSaveCategory = async (e) => {
+    e.preventDefault();
+    if (!categoryForm.name?.trim()) return;
+
+    const payload = {
+      name: categoryForm.name.trim(),
+      color: categoryForm.color || '#6b7280'
+    };
+
+    try {
+      if (editingCategory) {
+        if (window.api?.updateCategory) {
+          await window.api.updateCategory(editingCategory.id, payload);
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            categories: prev.categories.map(c => c.id === editingCategory.id ? { ...c, ...payload } : c)
+          }));
+        }
+        toast.success('Categoria atualizada');
+      } else {
+        let createdId = null;
+        if (window.api?.addCategory) {
+          createdId = await window.api.addCategory(payload);
+        } else {
+          createdId = Date.now();
+          setOverview(prev => ({
+            ...prev,
+            categories: [...prev.categories, { id: createdId, ...payload }].sort((a, b) => a.name.localeCompare(b.name))
+          }));
+        }
+        toast.success('Categoria criada com sucesso');
+
+        if (categoryModalReturnToExpense && createdId) {
+          setExpenseForm(prev => ({ ...prev, category_id: String(createdId) }));
+        }
+      }
+      setShowCategoryModal(false);
+      setEditingCategory(null);
+      setCategoryForm({ name: '', color: '#10b981' });
+      await loadData();
+    } catch (err) {
+      toast.error('Erro ao salvar categoria');
+    }
+  };
+
+  const handleDeleteCategory = async (cat) => {
+    if (!confirm(`Deseja realmente remover a categoria "${cat.name}"? As despesas associadas a ela passarão a ficar sem categoria.`)) return;
+    try {
+      if (window.api?.deleteCategory) {
+        await window.api.deleteCategory(cat.id);
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          categories: prev.categories.filter(c => c.id !== cat.id)
+        }));
+      }
+      toast.success('Categoria removida');
+      await loadData();
+    } catch (err) {
+      toast.error('Erro ao remover categoria');
+    }
+  };
+
   // Ações de Despesas
   const handleOpenAddExpense = () => {
     setEditingExpense(null);
@@ -720,7 +835,7 @@ export default function App() {
             <DollarSign size={13} className="stroke-[2.5]" />
           </div>
           <span className="text-xs font-semibold tracking-wide text-gray-200">Cashpoint</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.2.0</span>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.3.0</span>
         </div>
 
         {/* Controles de Janela */}
@@ -787,7 +902,7 @@ export default function App() {
               }`}
             >
               <Wallet size={17} />
-              <span>Contas & Cartões</span>
+              <span>Contas & Categorias</span>
             </button>
           </div>
 
@@ -818,12 +933,12 @@ export default function App() {
               <h1 className="text-xl font-bold tracking-tight text-white">
                 {activeTab === 'overview' && 'Painel Financeiro'}
                 {activeTab === 'expenses' && 'Despesas & Faturas'}
-                {activeTab === 'accounts' && 'Minhas Contas e Cartões'}
+                {activeTab === 'accounts' && 'Minhas Contas, Cartões & Categorias'}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
                 {activeTab === 'overview' && `Projeções e fechamento de contas para ${monthLabel}.`}
                 {activeTab === 'expenses' && `Lançamentos, assinaturas e parcelas vigentes em ${monthLabel}.`}
-                {activeTab === 'accounts' && 'Gerencie limites, dias de vencimento e saldos bancários.'}
+                {activeTab === 'accounts' && 'Gerencie limites, dias de vencimento, saldos e categorias personalizadas.'}
               </p>
             </div>
 
@@ -1441,6 +1556,65 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {/* Seção Categorias */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h2 className="text-sm font-semibold text-gray-200">Categorias de Despesas</h2>
+                    <p className="text-[11px] text-gray-500">
+                      Personalize as categorias para organizar despesas e faturas ({overview.categories.length} cadastradas).
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleOpenAddCategory(false)}
+                    className="flex items-center gap-1 text-xs bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-md text-emerald-400 transition-colors"
+                  >
+                    <Plus size={13} /> Nova Categoria
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5">
+                  {overview.categories.length === 0 ? (
+                    <div className="col-span-full py-6 text-center text-xs text-gray-500 bg-dark-800/20 border border-white/5 rounded-xl">
+                      Nenhuma categoria cadastrada.
+                    </div>
+                  ) : (
+                    overview.categories.map(cat => (
+                      <div
+                        key={cat.id}
+                        className="group p-2.5 rounded-xl bg-dark-800/60 border border-white/5 hover:border-white/10 flex items-center justify-between transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0 pr-1">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm"
+                            style={{ backgroundColor: cat.color || '#6b7280' }}
+                          />
+                          <span className="text-xs font-medium text-gray-200 truncate" title={cat.name}>
+                            {cat.name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button
+                            onClick={() => handleOpenEditCategory(cat)}
+                            className="text-gray-400 hover:text-emerald-400 p-1 rounded hover:bg-white/10 transition-colors"
+                            title="Editar categoria"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCategory(cat)}
+                            className="text-gray-500 hover:text-rose-400 p-1 rounded hover:bg-white/10 transition-colors"
+                            title="Excluir categoria"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </main>
@@ -1879,7 +2053,16 @@ export default function App() {
             {/* Categoria e Forma de Pagamento */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[11px] text-gray-400 block mb-1">Categoria</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] text-gray-400">Categoria</label>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenAddCategory(true)}
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-0.5 hover:underline"
+                  >
+                    <Plus size={11} /> Nova Categoria
+                  </button>
+                </div>
                 <select
                   value={expenseForm.category_id}
                   onChange={e => setExpenseForm({ ...expenseForm, category_id: e.target.value })}
@@ -1965,6 +2148,115 @@ export default function App() {
                 className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
               >
                 {editingExpense ? 'Salvar Alterações' : 'Salvar Despesa'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: CATEGORIA (NOVA OU EDITAR) */}
+      {showCategoryModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <form onSubmit={handleSaveCategory} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-sm space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <h3 className="text-sm font-semibold text-white">
+                {editingCategory ? 'Editar Categoria' : 'Adicionar Nova Categoria'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoryModal(false);
+                  setEditingCategory(null);
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Nome da Categoria</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: Pets, Farmácia, Cursos, Restaurante"
+                value={categoryForm.name}
+                onChange={e => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1.5">Cor de Identificação</label>
+              
+              {/* Paleta rápida de cores */}
+              <div className="grid grid-cols-8 gap-1.5 mb-2.5">
+                {PRESET_CATEGORY_COLORS.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCategoryForm({ ...categoryForm, color: c })}
+                    className={`w-7 h-7 rounded-lg transition-transform flex items-center justify-center ${
+                      categoryForm.color?.toLowerCase() === c.toLowerCase()
+                        ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-dark-800'
+                        : 'hover:scale-105 opacity-80 hover:opacity-100'
+                    }`}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+
+              {/* Seletor de cor personalizada */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={categoryForm.color}
+                  onChange={e => setCategoryForm({ ...categoryForm, color: e.target.value })}
+                  className="w-8 h-8 rounded-lg cursor-pointer bg-dark-900 border border-white/10 p-0.5"
+                />
+                <input
+                  type="text"
+                  value={categoryForm.color}
+                  onChange={e => setCategoryForm({ ...categoryForm, color: e.target.value })}
+                  className="w-24 bg-dark-900 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
+                  placeholder="#10b981"
+                />
+                <span className="text-[11px] text-gray-400">Personalizada</span>
+              </div>
+            </div>
+
+            {/* Preview da Categoria */}
+            <div className="pt-1">
+              <span className="text-[10px] text-gray-400 block mb-1">Pré-visualização:</span>
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium"
+                style={{
+                  backgroundColor: (categoryForm.color || '#6b7280') + '22',
+                  color: categoryForm.color || '#d1d5db',
+                  border: `1px solid ${(categoryForm.color || '#6b7280')}44`
+                }}
+              >
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: categoryForm.color || '#6b7280' }} />
+                <span>{categoryForm.name || 'Nome da Categoria'}</span>
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoryModal(false);
+                  setEditingCategory(null);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-white/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+              >
+                {editingCategory ? 'Salvar Categoria' : 'Criar Categoria'}
               </button>
             </div>
           </form>

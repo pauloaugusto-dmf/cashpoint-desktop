@@ -94,18 +94,29 @@ async function initDatabase() {
     WHERE competence_month IS NULL OR competence_month = '';
   `);
 
-  // Seed default categories if none exist
-  const categoriesCount = await dbInstance.get('SELECT COUNT(*) as count FROM categories;');
-  if (categoriesCount && categoriesCount.count === 0) {
-    const defaults = [
-      ['Alimentação', '#f97316'],
-      ['Moradia', '#3b82f6'],
-      ['Transporte', '#eab308'],
-      ['Lazer & Assinaturas', '#8b5cf6'],
-      ['Saúde', '#10b981'],
-      ['Outros', '#6b7280']
-    ];
-    for (const [name, color] of defaults) {
+  // Seed default categories if missing
+  const standardCategories = [
+    ['Alimentação', '#f97316'],
+    ['Supermercado', '#fb923c'],
+    ['Moradia & Contas', '#3b82f6'],
+    ['Transporte & Combustível', '#eab308'],
+    ['Saúde & Farmácia', '#10b981'],
+    ['Educação & Cursos', '#06b6d4'],
+    ['Lazer & Viagens', '#8b5cf6'],
+    ['Assinaturas & Streaming', '#a855f7'],
+    ['Compras & Eletrônicos', '#6366f1'],
+    ['Vestuário & Cuidados', '#ec4899'],
+    ['Pets', '#14b8a6'],
+    ['Investimentos & Reserva', '#22c55e'],
+    ['Trabalho & Negócios', '#84cc16'],
+    ['Presentes & Doações', '#d946ef'],
+    ['Serviços Financeiros', '#64748b'],
+    ['Outros', '#6b7280']
+  ];
+
+  for (const [name, color] of standardCategories) {
+    const existing = await dbInstance.get('SELECT id FROM categories WHERE name = ?;', [name]);
+    if (!existing) {
       await dbInstance.run('INSERT INTO categories (name, color) VALUES (?, ?);', [name, color]);
     }
   }
