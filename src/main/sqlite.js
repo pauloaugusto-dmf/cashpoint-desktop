@@ -72,6 +72,7 @@ async function initDatabase() {
       due_day INTEGER CHECK (due_day IS NULL OR (due_day >= 1 AND due_day <= 31)),
       is_paid INTEGER NOT NULL DEFAULT 0,
       is_active INTEGER NOT NULL DEFAULT 1,
+      competence_month TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
@@ -82,6 +83,16 @@ async function initDatabase() {
   if (!expColNames.includes('is_active')) {
     await dbInstance.run("ALTER TABLE expenses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;");
   }
+  if (!expColNames.includes('competence_month')) {
+    await dbInstance.run("ALTER TABLE expenses ADD COLUMN competence_month TEXT;");
+  }
+
+  // Preenche competência para registros antigos com base no created_at
+  await dbInstance.run(`
+    UPDATE expenses
+    SET competence_month = strftime('%Y-%m', created_at)
+    WHERE competence_month IS NULL OR competence_month = '';
+  `);
 
   // Seed default categories if none exist
   const categoriesCount = await dbInstance.get('SELECT COUNT(*) as count FROM categories;');
@@ -238,19 +249,20 @@ async function addExpense(payload) {
     total_installments = null,
     due_day = null,
     is_paid = 0,
-    is_active = 1
+    is_active = 1,
+    competence_month = null
   } = payload;
 
   const res = await db.run(`
     INSERT INTO expenses (
       category_id, description, target_type, account_id, credit_card_id,
       frequency_type, amount_cents, current_installment, total_installments,
-      due_day, is_paid, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+      due_day, is_paid, is_active, competence_month
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
   `, [
     category_id, description, target_type, account_id, credit_card_id,
     frequency_type, amount_cents, current_installment, total_installments,
-    due_day, is_paid ? 1 : 0, is_active !== 0 ? 1 : 0
+    due_day, is_paid ? 1 : 0, is_active !== 0 ? 1 : 0, competence_month || null
   ]);
 
   return res.lastID;
@@ -270,7 +282,8 @@ async function updateExpense(id, payload) {
     total_installments = null,
     due_day = null,
     is_paid = 0,
-    is_active = 1
+    is_active = 1,
+    competence_month = null
   } = payload;
 
   await db.run(`
@@ -287,6 +300,7 @@ async function updateExpense(id, payload) {
       due_day = ?,
       is_paid = ?,
       is_active = ?,
+      competence_month = ?,
       updated_at = datetime('now', 'localtime')
     WHERE id = ?;
   `, [
@@ -302,6 +316,7 @@ async function updateExpense(id, payload) {
     due_day || null,
     is_paid ? 1 : 0,
     is_active !== 0 ? 1 : 0,
+    competence_month || null,
     id
   ]);
 }
@@ -366,8 +381,8 @@ async function importData(data) {
     }
     if (data.expenses?.length) {
       for (const e of data.expenses) {
-        await db.run(`INSERT INTO expenses (id, category_id, description, target_type, account_id, credit_card_id, frequency_type, amount_cents, current_installment, total_installments, due_day, is_paid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          [e.id, e.category_id, e.description, e.target_type, e.account_id, e.credit_card_id, e.frequency_type, e.amount_cents, e.current_installment, e.total_installments, e.due_day, e.is_paid, e.created_at, e.updated_at]);
+        await db.run(`INSERT INTO expenses (id, category_id, description, target_type, account_id, credit_card_id, frequency_type, amount_cents, current_installment, total_installments, due_day, is_paid, is_active, competence_month, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          [e.id, e.category_id, e.description, e.target_type, e.account_id, e.credit_card_id, e.frequency_type, e.amount_cents, e.current_installment, e.total_installments, e.due_day, e.is_paid, e.is_active !== undefined ? e.is_active : 1, e.competence_month || null, e.created_at, e.updated_at]);
       }
     }
     await db.exec('COMMIT;');

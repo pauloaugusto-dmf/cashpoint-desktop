@@ -52,6 +52,38 @@ const parseBRLInputToCents = (val) => {
   return Math.round((isNegative ? -num : num) * 100);
 };
 
+// Formata data para YYYY-MM
+const formatYearMonth = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+};
+
+// Obtém { year, monthIndex } de competência da despesa com fallback
+const getExpenseCompetence = (exp) => {
+  if (exp?.competence_month && typeof exp.competence_month === 'string' && exp.competence_month.includes('-')) {
+    const [y, m] = exp.competence_month.split('-').map(Number);
+    return { year: y, monthIndex: m - 1 };
+  }
+  if (exp?.created_at) {
+    const d = new Date(exp.created_at);
+    if (!isNaN(d.getTime())) {
+      return { year: d.getFullYear(), monthIndex: d.getMonth() };
+    }
+  }
+  const now = new Date();
+  return { year: now.getFullYear(), monthIndex: now.getMonth() };
+};
+
+// Formata YYYY-MM para "Novembro de 2026"
+const formatCompetenceLabel = (yearMonthStr) => {
+  if (!yearMonthStr || !yearMonthStr.includes('-')) return '';
+  const [y, m] = yearMonthStr.split('-').map(Number);
+  const d = new Date(y, m - 1, 1);
+  const name = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  return name.charAt(0).toUpperCase() + name.slice(1);
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [expenseFilter, setExpenseFilter] = useState('all'); // 'all' | 'recurring' | 'installment' | 'one_time'
@@ -72,6 +104,7 @@ export default function App() {
   // Estados de Edição
   const [editingAccount, setEditingAccount] = useState(null);
   const [editingCard, setEditingCard] = useState(null);
+  const [editingExpense, setEditingExpense] = useState(null);
 
   // Forms
   const [accountForm, setAccountForm] = useState({ name: '', balance_reais: '' });
@@ -88,7 +121,8 @@ export default function App() {
     current_installment: 1,
     total_installments: 12,
     due_day: 10,
-    is_paid: false
+    is_paid: false,
+    competence_month: ''
   });
 
   // Carregar dados
@@ -116,10 +150,10 @@ export default function App() {
             { id: 4, name: 'Eletrônicos', color: '#10b981' }
           ],
           expenses: [
-            { id: 1, description: 'Internet Fibra', amount_cents: 11990, frequency_type: 'recurring', due_day: 15, is_active: 1, target_type: 'account', account_name: 'Nubank Principal', category_name: 'Moradia / Serviços', category_color: '#3b82f6', is_paid: 1, created_at: dateStr },
-            { id: 2, description: 'Netflix 4K', amount_cents: 5590, frequency_type: 'recurring', due_day: 22, is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Assinaturas & Lazer', category_color: '#8b5cf6', is_paid: 0, created_at: dateStr },
-            { id: 3, description: 'Notebook Dell', amount_cents: 45000, frequency_type: 'installment', current_installment: 3, total_installments: 10, is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Eletrônicos', category_color: '#10b981', is_paid: 0, created_at: dateStr },
-            { id: 4, description: 'Supermercado Mensal', amount_cents: 65000, frequency_type: 'one_time', is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Alimentação', category_color: '#f97316', is_paid: 0, created_at: dateStr }
+            { id: 1, description: 'Internet Fibra', amount_cents: 11990, frequency_type: 'recurring', due_day: 15, is_active: 1, target_type: 'account', account_name: 'Nubank Principal', category_name: 'Moradia / Serviços', category_color: '#3b82f6', is_paid: 1, competence_month: formatYearMonth(now), created_at: dateStr },
+            { id: 2, description: 'Netflix 4K', amount_cents: 5590, frequency_type: 'recurring', due_day: 22, is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Assinaturas & Lazer', category_color: '#8b5cf6', is_paid: 0, competence_month: formatYearMonth(now), created_at: dateStr },
+            { id: 3, description: 'Notebook Dell', amount_cents: 45000, frequency_type: 'installment', current_installment: 3, total_installments: 10, is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Eletrônicos', category_color: '#10b981', is_paid: 0, competence_month: formatYearMonth(now), created_at: dateStr },
+            { id: 4, description: 'Supermercado Mensal', amount_cents: 65000, frequency_type: 'one_time', is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Alimentação', category_color: '#f97316', is_paid: 0, competence_month: formatYearMonth(now), created_at: dateStr }
           ]
         });
       }
@@ -163,7 +197,6 @@ export default function App() {
   // Despesas ativas e projetadas para o mês selecionado
   const monthExpenses = useMemo(() => {
     const list = [];
-    const now = new Date();
     const targetYear = targetDate.getFullYear();
     const targetMonth = targetDate.getMonth();
 
@@ -171,31 +204,39 @@ export default function App() {
       // Ignora despesas canceladas/pausadas
       if (exp.is_active === 0) continue;
 
-      if (exp.frequency_type === 'recurring') {
-        // Despesa contínua se repete em todos os meses
-        list.push({
-          ...exp,
-          is_paid: monthOffset === 0 ? exp.is_paid : (monthOffset < 0 ? 1 : 0),
-          is_projected: monthOffset !== 0
-        });
-      } else if (exp.frequency_type === 'installment') {
-        // Compra parcelada: projeta a parcela de acordo com o offset
-        const total = exp.total_installments || 1;
-        const current = exp.current_installment || 1;
-        const projected = current + monthOffset;
+      const comp = getExpenseCompetence(exp);
+      const diffMonths = (targetYear - comp.year) * 12 + (targetMonth - comp.monthIndex);
 
-        if (projected >= 1 && projected <= total) {
+      if (exp.frequency_type === 'recurring') {
+        // Despesa contínua se repete a partir do mês de competência
+        if (diffMonths >= 0) {
           list.push({
             ...exp,
-            current_installment: projected,
-            is_paid: monthOffset === 0 ? exp.is_paid : (monthOffset < 0 ? 1 : 0),
+            is_paid: diffMonths === 0 ? exp.is_paid : (monthOffset < 0 ? 1 : 0),
             is_projected: monthOffset !== 0
           });
         }
+      } else if (exp.frequency_type === 'installment') {
+        // Compra parcelada: projeta a parcela a partir do mês de competência
+        // A parcela 'current_installment' cadastrada compete ao mês 'competence_month' (diffMonths === 0).
+        // Antes do mês de competência (diffMonths < 0), a compra não vigora nesta fatura/mês.
+        if (diffMonths >= 0) {
+          const total = exp.total_installments || 1;
+          const baseInstallment = exp.current_installment || 1;
+          const projected = baseInstallment + diffMonths;
+
+          if (projected <= total) {
+            list.push({
+              ...exp,
+              current_installment: projected,
+              is_paid: diffMonths === 0 ? exp.is_paid : (monthOffset < 0 ? 1 : 0),
+              is_projected: monthOffset !== 0
+            });
+          }
+        }
       } else if (exp.frequency_type === 'one_time') {
-        // Despesa única: cai no mês em que foi criada
-        const expDate = exp.created_at ? new Date(exp.created_at) : now;
-        if (expDate.getFullYear() === targetYear && expDate.getMonth() === targetMonth) {
+        // Despesa única: cai exatamente no mês de competência
+        if (diffMonths === 0) {
           list.push({
             ...exp,
             is_projected: monthOffset !== 0
@@ -415,6 +456,49 @@ export default function App() {
   };
 
   // Ações de Despesas
+  const handleOpenAddExpense = () => {
+    setEditingExpense(null);
+    setExpenseForm({
+      description: '',
+      amount_reais: '',
+      amount_mode: 'installment',
+      target_type: 'card',
+      account_id: '',
+      credit_card_id: '',
+      category_id: '',
+      frequency_type: 'one_time',
+      current_installment: 1,
+      total_installments: 12,
+      due_day: 10,
+      is_paid: false,
+      competence_month: formatYearMonth(targetDate)
+    });
+    setShowExpenseModal(true);
+  };
+
+  const handleOpenEditExpense = (exp) => {
+    setEditingExpense(exp);
+    const comp = getExpenseCompetence(exp);
+    const compStr = exp.competence_month || `${comp.year}-${String(comp.monthIndex + 1).padStart(2, '0')}`;
+    const reais = ((exp.amount_cents || 0) / 100).toFixed(2).replace('.', ',');
+    setExpenseForm({
+      description: exp.description || '',
+      amount_reais: reais,
+      amount_mode: 'installment',
+      target_type: exp.target_type || 'card',
+      account_id: exp.account_id ? String(exp.account_id) : '',
+      credit_card_id: exp.credit_card_id ? String(exp.credit_card_id) : '',
+      category_id: exp.category_id ? String(exp.category_id) : '',
+      frequency_type: exp.frequency_type || 'one_time',
+      current_installment: exp.current_installment || 1,
+      total_installments: exp.total_installments || 1,
+      due_day: exp.due_day || 10,
+      is_paid: !!exp.is_paid,
+      competence_month: compStr
+    });
+    setShowExpenseModal(true);
+  };
+
   const handleCreateExpense = async (e) => {
     e.preventDefault();
     if (!expenseForm.description || !expenseForm.amount_reais) return;
@@ -430,31 +514,61 @@ export default function App() {
       amount_cents = Math.round(amount_cents / totalInst);
     }
 
+    const competence_month = expenseForm.competence_month || formatYearMonth(targetDate);
+
+    const payload = {
+      description: expenseForm.description.trim(),
+      amount_cents,
+      target_type: expenseForm.target_type,
+      account_id: expenseForm.target_type === 'account' ? (expenseForm.account_id || null) : null,
+      credit_card_id: expenseForm.target_type === 'card' ? (expenseForm.credit_card_id || null) : null,
+      category_id: expenseForm.category_id || null,
+      frequency_type: expenseForm.frequency_type,
+      current_installment: currInst,
+      total_installments: totalInst,
+      due_day: expenseForm.due_day ? parseInt(expenseForm.due_day, 10) : null,
+      is_paid: expenseForm.is_paid ? 1 : 0,
+      is_active: 1,
+      competence_month
+    };
+
     try {
-      if (window.api?.addExpense) {
-        await window.api.addExpense({
-          description: expenseForm.description,
-          amount_cents,
-          target_type: expenseForm.target_type,
-          account_id: expenseForm.target_type === 'account' ? (expenseForm.account_id || null) : null,
-          credit_card_id: expenseForm.target_type === 'card' ? (expenseForm.credit_card_id || null) : null,
-          category_id: expenseForm.category_id || null,
-          frequency_type: expenseForm.frequency_type,
-          current_installment: currInst,
-          total_installments: totalInst,
-          due_day: expenseForm.due_day ? parseInt(expenseForm.due_day, 10) : null,
-          is_paid: expenseForm.is_paid ? 1 : 0,
-          is_active: 1
-        });
+      if (editingExpense) {
+        if (window.api?.updateExpense) {
+          await window.api.updateExpense(editingExpense.id, payload);
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            expenses: prev.expenses.map(exp => exp.id === editingExpense.id ? { ...exp, ...payload } : exp)
+          }));
+        }
+        toast.success('Despesa atualizada com sucesso');
+      } else {
+        if (window.api?.addExpense) {
+          await window.api.addExpense(payload);
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            expenses: [
+              {
+                id: Date.now(),
+                ...payload,
+                created_at: new Date().toISOString()
+              },
+              ...prev.expenses
+            ]
+          }));
+        }
+        toast.success(
+          isRecurring
+            ? 'Despesa contínua cadastrada'
+            : isInstallment
+            ? 'Compra parcelada registrada'
+            : 'Despesa registrada'
+        );
       }
-      toast.success(
-        isRecurring
-          ? 'Despesa contínua cadastrada'
-          : isInstallment
-          ? 'Compra parcelada registrada'
-          : 'Despesa registrada'
-      );
       setShowExpenseModal(false);
+      setEditingExpense(null);
       setExpenseForm({
         description: '',
         amount_reais: '',
@@ -467,23 +581,36 @@ export default function App() {
         current_installment: 1,
         total_installments: 12,
         due_day: 10,
-        is_paid: false
+        is_paid: false,
+        competence_month: ''
       });
       loadData();
     } catch (err) {
-      toast.error('Erro ao cadastrar despesa');
+      toast.error('Erro ao salvar despesa');
     }
   };
 
   const handleTogglePaid = async (expense) => {
-    if (monthOffset !== 0) {
-      toast.info('Para marcar como pago/pendente, retorne ao Mês Atual.');
+    const comp = getExpenseCompetence(expense);
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    const diffMonths = (targetYear - comp.year) * 12 + (targetMonth - comp.monthIndex);
+
+    // Se estiver visualizando uma projeção futura
+    if (diffMonths > 0) {
+      toast.info('Esta parcela é uma projeção futura. O pagamento é controlado no mês de competência.');
       return;
     }
+
     try {
       const nextStatus = !expense.is_paid;
       if (window.api?.toggleExpensePaid) {
         await window.api.toggleExpensePaid(expense.id, nextStatus);
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          expenses: prev.expenses.map(e => e.id === expense.id ? { ...e, is_paid: nextStatus ? 1 : 0 } : e)
+        }));
       }
       toast.success(nextStatus ? 'Marcada como paga' : 'Marcada como pendente');
       loadData();
@@ -513,13 +640,28 @@ export default function App() {
       toast.info('Esta compra já está na última parcela');
       return;
     }
+    const comp = getExpenseCompetence(expense);
+    const nextDate = new Date(comp.year, comp.monthIndex + 1, 1);
+    const nextCompMonth = formatYearMonth(nextDate);
+
     try {
       if (window.api?.updateExpense) {
         await window.api.updateExpense(expense.id, {
           ...expense,
           current_installment: current + 1,
+          competence_month: nextCompMonth,
           is_paid: 0
         });
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          expenses: prev.expenses.map(e => e.id === expense.id ? {
+            ...e,
+            current_installment: current + 1,
+            competence_month: nextCompMonth,
+            is_paid: 0
+          } : e)
+        }));
       }
       toast.success(`Avançado para a parcela ${current + 1} de ${total}`);
       loadData();
@@ -578,7 +720,7 @@ export default function App() {
             <DollarSign size={13} className="stroke-[2.5]" />
           </div>
           <span className="text-xs font-semibold tracking-wide text-gray-200">Cashpoint</span>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.1.0</span>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded">v1.2.0</span>
         </div>
 
         {/* Controles de Janela */}
@@ -687,7 +829,7 @@ export default function App() {
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowExpenseModal(true)}
+                onClick={handleOpenAddExpense}
                 className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors shadow-lg shadow-emerald-950/40"
               >
                 <Plus size={15} />
@@ -1162,6 +1304,14 @@ export default function App() {
                               )}
 
                               <button
+                                onClick={() => handleOpenEditExpense(exp)}
+                                className="p-1 hover:bg-white/10 text-gray-400 hover:text-emerald-400 rounded transition-colors"
+                                title="Editar despesa"
+                              >
+                                <Pencil size={14} />
+                              </button>
+
+                              <button
                                 onClick={() => handleDeleteExpense(exp.id)}
                                 className="p-1 hover:bg-rose-500/20 text-gray-400 hover:text-rose-400 rounded transition-colors"
                                 title="Excluir do histórico"
@@ -1451,15 +1601,20 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: NOVA DESPESA */}
+      {/* MODAL: NOVA OU EDITAR DESPESA */}
       {showExpenseModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleCreateExpense} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-lg space-y-4">
+          <form onSubmit={handleCreateExpense} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-white/5 pb-3">
-              <h3 className="text-sm font-semibold text-white">Registrar Nova Despesa</h3>
+              <h3 className="text-sm font-semibold text-white">
+                {editingExpense ? 'Editar Despesa' : 'Registrar Nova Despesa'}
+              </h3>
               <button
                 type="button"
-                onClick={() => setShowExpenseModal(false)}
+                onClick={() => {
+                  setShowExpenseModal(false);
+                  setEditingExpense(null);
+                }}
                 className="text-gray-400 hover:text-white"
               >
                 <X size={16} />
@@ -1472,7 +1627,7 @@ export default function App() {
               <input
                 type="text"
                 required
-                placeholder="Ex: Internet Fibra, Netflix, Notebook Dell, Mercado"
+                placeholder="Ex: Internet Fibra, Netflix, Tablet Samsung, Mercado"
                 value={expenseForm.description}
                 onChange={e => setExpenseForm({ ...expenseForm, description: e.target.value })}
                 className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
@@ -1510,7 +1665,7 @@ export default function App() {
                   <span className="font-semibold flex items-center gap-1">
                     <Layers size={12} /> Parcelada
                   </span>
-                  <span className="text-[10px] text-gray-500 leading-none">Ex: 10x de R$ 150</span>
+                  <span className="text-[10px] text-gray-500 leading-none">Ex: 6x de R$ 150</span>
                 </button>
 
                 <button
@@ -1528,6 +1683,68 @@ export default function App() {
               </div>
             </div>
 
+            {/* Mês de Competência */}
+            <div className="p-3 rounded-lg bg-dark-900/80 border border-white/5 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] text-gray-300 font-medium flex items-center gap-1.5">
+                  <Calendar size={13} className="text-emerald-400" />
+                  <span>Mês de Competência</span>
+                </label>
+                <span className="text-[11px] font-semibold text-emerald-400">
+                  {formatCompetenceLabel(expenseForm.competence_month)}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input
+                  type="month"
+                  required
+                  value={expenseForm.competence_month}
+                  onChange={e => setExpenseForm({ ...expenseForm, competence_month: e.target.value })}
+                  style={{ colorScheme: 'dark' }}
+                  className="sm:col-span-2 bg-dark-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setExpenseForm({ ...expenseForm, competence_month: formatYearMonth(new Date()) })}
+                    className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-medium border transition-colors ${
+                      expenseForm.competence_month === formatYearMonth(new Date())
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                        : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    Mês Atual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                      setExpenseForm({ ...expenseForm, competence_month: formatYearMonth(next) });
+                    }}
+                    className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-medium border transition-colors ${
+                      (() => {
+                        const now = new Date();
+                        const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                        return expenseForm.competence_month === formatYearMonth(next);
+                      })()
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                        : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    Próximo Mês
+                  </button>
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-500">
+                {expenseForm.frequency_type === 'installment'
+                  ? 'Mês em que a parcela cadastrada abaixo entrará em vigor.'
+                  : expenseForm.frequency_type === 'recurring'
+                  ? 'Mês a partir do qual esta assinatura começará a ser cobrada.'
+                  : 'Mês em que esta despesa pontual será contabilizada.'}
+              </p>
+            </div>
+
             {/* Caixa Informativa para Contínuas / Assinaturas */}
             {expenseForm.frequency_type === 'recurring' && (
               <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20 flex items-start gap-2.5">
@@ -1535,7 +1752,7 @@ export default function App() {
                 <div className="text-xs text-sky-200">
                   <span className="font-semibold">Despesa Mensal Fixa / Assinatura:</span>
                   <p className="text-[11px] text-gray-400 mt-0.5">
-                    Essa cobrança se repetirá todo mês automaticamente até você cancelar ou pausar.
+                    Essa cobrança se repetirá todo mês a partir da competência selecionada até você pausar ou cancelar.
                   </p>
                 </div>
               </div>
@@ -1558,7 +1775,9 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-amber-300/90 block mb-1">Parcela Atual (Mês Corrente)</label>
+                    <label className="text-[11px] text-amber-300/90 block mb-1">
+                      Parcela Atual (na Competência)
+                    </label>
                     <input
                       type="number"
                       min="1"
@@ -1570,6 +1789,32 @@ export default function App() {
                     />
                   </div>
                 </div>
+
+                {/* Resumo do parcelamento com competência */}
+                {(() => {
+                  const total = parseInt(expenseForm.total_installments, 10) || 1;
+                  const curr = parseInt(expenseForm.current_installment, 10) || 1;
+                  if (expenseForm.competence_month && expenseForm.competence_month.includes('-')) {
+                    const [y, m] = expenseForm.competence_month.split('-').map(Number);
+                    const startLabel = formatCompetenceLabel(expenseForm.competence_month);
+                    const remainingMonths = Math.max(0, total - curr);
+                    const endDate = new Date(y, m - 1 + remainingMonths, 1);
+                    const endLabel = endDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+                    const endCap = endLabel.charAt(0).toUpperCase() + endLabel.slice(1);
+
+                    return (
+                      <div className="text-[11px] text-amber-200/90 bg-amber-500/10 p-2.5 rounded-lg border border-amber-500/20 leading-relaxed">
+                        A parcela <strong>{curr} de {total}</strong> será lançada em <strong>{startLabel}</strong>.
+                        {remainingMonths > 0 ? (
+                          <span> As próximas parcelas irão até <strong>{endCap}</strong> (parcela {total} de {total}).</span>
+                        ) : (
+                          <span> Esta é a última parcela da compra.</span>
+                        )}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 <div className="flex items-center gap-4 text-xs text-gray-300 pt-1">
                   <span className="text-[11px] text-gray-400">O valor digitado é:</span>
@@ -1700,14 +1945,17 @@ export default function App() {
                 className="rounded bg-dark-900 border-white/10 text-emerald-500 focus:ring-0"
               />
               <label htmlFor="is_paid_cb" className="text-xs text-gray-300 cursor-pointer">
-                Esta mensalidade/despesa já está paga neste mês?
+                Esta despesa/parcela já está paga na competência?
               </label>
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
               <button
                 type="button"
-                onClick={() => setShowExpenseModal(false)}
+                onClick={() => {
+                  setShowExpenseModal(false);
+                  setEditingExpense(null);
+                }}
                 className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-white/5"
               >
                 Cancelar
@@ -1716,7 +1964,7 @@ export default function App() {
                 type="submit"
                 className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
               >
-                Salvar Despesa
+                {editingExpense ? 'Salvar Alterações' : 'Salvar Despesa'}
               </button>
             </div>
           </form>
