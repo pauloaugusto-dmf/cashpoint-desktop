@@ -340,6 +340,16 @@ async function toggleExpensePaid(id, is_paid) {
   );
 }
 
+async function toggleExpensesPaid(ids, is_paid) {
+  if (!ids || ids.length === 0) return;
+  const db = await initDatabase();
+  const placeholders = ids.map(() => '?').join(',');
+  await db.run(
+    `UPDATE expenses SET is_paid = ?, updated_at = datetime('now', 'localtime') WHERE id IN (${placeholders});`,
+    [is_paid ? 1 : 0, ...ids]
+  );
+}
+
 async function toggleExpenseActive(id, is_active) {
   const db = await initDatabase();
   await db.run(
@@ -423,6 +433,7 @@ module.exports = {
   addExpense,
   updateExpense,
   toggleExpensePaid,
+  toggleExpensesPaid,
   toggleExpenseActive,
   deleteExpense,
   getAllData,

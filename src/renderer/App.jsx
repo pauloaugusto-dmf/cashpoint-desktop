@@ -19,6 +19,10 @@ import {
   Calendar,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  CircleDot,
   RotateCcw,
   DollarSign,
   PauseCircle,
@@ -127,6 +131,14 @@ export default function App() {
   const [searchFilter, setSearchFilter] = useState('');
   const [hoveredCategory, setHoveredCategory] = useState(null);
   const [monthOffset, setMonthOffset] = useState(0); // 0 = Mês atual, 1 = Próximo mês, -1 = Mês passado
+  const [expandedCardInvoices, setExpandedCardInvoices] = useState({});
+
+  const toggleExpandCardInvoice = (cardId) => {
+    setExpandedCardInvoices(prev => ({
+      ...prev,
+      [cardId]: !prev[cardId]
+    }));
+  };
 
   // Estados para Variação Anual de Contas (1 Ano)
   const [annualYear, setAnnualYear] = useState(() => new Date().getFullYear());
@@ -332,63 +344,195 @@ export default function App() {
   }, [overview.expenses]);
 
   const totalInstallmentDebtCents = useMemo(() => {
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+
     return overview.expenses
       .filter(e => e.frequency_type === 'installment' && e.is_active !== 0)
       .reduce((acc, exp) => {
+        const comp = getExpenseCompetence(exp);
+        const diffMonths = (targetYear - comp.year) * 12 + (targetMonth - comp.monthIndex);
         const total = exp.total_installments || 1;
-        const current = exp.current_installment || 1;
-        const remaining = Math.max(0, total - current + (exp.is_paid ? 0 : 1));
-        return acc + (remaining * exp.amount_cents);
+        const baseInstallment = exp.current_installment || 1;
+
+        let remainingFuture = 0;
+        if (diffMonths < 0) {
+          // A compra começa após o mês selecionado; todas as parcelas restantes são futuras
+          remainingFuture = Math.max(0, total - baseInstallment + 1);
+        } else {
+          // A parcela deste mês selecionado é (baseInstallment + diffMonths).
+          // Do próximo mês em diante restam as parcelas estritamente posteriores à deste mês:
+          const projectedInTargetMonth = baseInstallment + diffMonths;
+          remainingFuture = Math.max(0, total - projectedInTargetMonth);
+        }
+
+        return acc + (remainingFuture * (exp.amount_cents || 0));
       }, 0);
-  }, [overview.expenses]);
+  }, [overview.expenses, targetDate]);
+
+  const nextMonthLabel = useMemo(() => {
+    const nextD = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
+    const name = nextD.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }, [targetDate]);
+
+  // Agrupamento consolidado das despesas do mês por cartão de crédito
+  const consolidatedMonthExpenses = useMemo(() => {
+    const accountExps = monthExpenses.filter(e => e.target_type !== 'card' || !e.credit_card_id);
+
+    const cardMap = new Map();
+    for (const exp of monthExpenses) {
+      if (exp.target_type === 'card' && exp.credit_card_id) {
+        if (!cardMap.has(exp.credit_card_id)) {
+          cardMap.set(exp.credit_card_id, []);
+        }
+        cardMap.get(exp.credit_card_id).push(exp);
+      }
+    }
+
+    const cardInvoices = [];
+    cardMap.forEach((expensesOnCard, cardId) => {
+      const card = overview.creditCards.find(c => c.id === cardId) || {
+        id: cardId,
+        name: expensesOnCard[0]?.credit_card_name || 'Cartão de Crédito',
+        closing_day: null,
+        due_day: null,
+        limit_cents: 0
+      };
+
+      const totalCents = expensesOnCard.reduce((sum, e) => sum + (e.amount_cents || 0), 0);
+      const allPaid = expensesOnCard.length > 0 && expensesOnCard.every(e => e.is_paid === 1);
+      const somePaid = expensesOnCard.some(e => e.is_paid === 1);
+
+      cardInvoices.push({
+        id: `card-invoice-${card.id}`,
+        is_card_invoice: true,
+        credit_card_id: card.id,
+        credit_card_name: card.name,
+        card,
+        description: `Fatura ${card.name}`,
+        amount_cents: totalCents,
+        is_paid: allPaid ? 1 : 0,
+        is_partially_paid: somePaid && !allPaid,
+        target_type: 'card',
+        due_day: card.due_day || null,
+        closing_day: card.closing_day || null,
+        items: expensesOnCard,
+        items_count: expensesOnCard.length,
+        frequency_type: 'card_invoice',
+        category_name: 'Fatura de Cartão',
+        category_color: '#a855f7'
+      });
+    });
+
+    return [...cardInvoices, ...accountExps];
+  }, [monthExpenses, overview.creditCards]);
 
   // Despesas filtradas para exibição na tabela
   const displayedExpenses = useMemo(() => {
-    return monthExpenses.filter(exp => {
-      // Filtro por frequência
-      if (expenseFilter !== 'all' && exp.frequency_type !== expenseFilter) {
-        return false;
-      }
-      // Filtro por categoria
-      if (categoryFilter !== 'all') {
-        if (categoryFilter === 'none') {
-          if (exp.category_id) return false;
-        } else if (String(exp.category_id) !== String(categoryFilter)) {
+    // Se o usuário selecionou um cartão específico ("ir até o cartão"), exibe as compras detalhadas daquele cartão
+    if (cardFilter.startsWith('card:')) {
+      const cardId = cardFilter.replace('card:', '');
+      return monthExpenses.filter(exp => {
+        if (exp.target_type !== 'card' || String(exp.credit_card_id) !== cardId) {
           return false;
         }
-      }
-      // Filtro por cartão ou conta
-      if (cardFilter !== 'all') {
-        if (cardFilter.startsWith('card:')) {
-          const cardId = cardFilter.replace('card:', '');
-          if (exp.target_type !== 'card' || String(exp.credit_card_id) !== cardId) {
-            return false;
-          }
-        } else if (cardFilter.startsWith('account:')) {
-          const accId = cardFilter.replace('account:', '');
-          if (exp.target_type !== 'account' || String(exp.account_id) !== accId) {
-            return false;
-          }
-        } else if (cardFilter === 'cards_only') {
-          if (exp.target_type !== 'card') return false;
-        } else if (cardFilter === 'accounts_only') {
-          if (exp.target_type !== 'account') return false;
+        if (expenseFilter !== 'all' && exp.frequency_type !== expenseFilter) {
+          return false;
         }
-      }
-      // Filtro por busca textual
+        if (categoryFilter !== 'all') {
+          if (categoryFilter === 'none') {
+            if (exp.category_id) return false;
+          } else if (String(exp.category_id) !== String(categoryFilter)) {
+            return false;
+          }
+        }
+        if (searchFilter.trim()) {
+          const query = searchFilter.toLowerCase().trim();
+          const descMatch = exp.description?.toLowerCase().includes(query);
+          const catMatch = exp.category_name?.toLowerCase().includes(query);
+          if (!descMatch && !catMatch) return false;
+        }
+        return true;
+      });
+    }
+
+    // Se o usuário filtrou por uma conta específica
+    if (cardFilter.startsWith('account:')) {
+      const accId = cardFilter.replace('account:', '');
+      return monthExpenses.filter(exp => {
+        if (exp.target_type !== 'account' || String(exp.account_id) !== accId) {
+          return false;
+        }
+        if (expenseFilter !== 'all' && exp.frequency_type !== expenseFilter) {
+          return false;
+        }
+        if (categoryFilter !== 'all') {
+          if (categoryFilter === 'none') {
+            if (exp.category_id) return false;
+          } else if (String(exp.category_id) !== String(categoryFilter)) {
+            return false;
+          }
+        }
+        if (searchFilter.trim()) {
+          const query = searchFilter.toLowerCase().trim();
+          const descMatch = exp.description?.toLowerCase().includes(query);
+          const catMatch = exp.category_name?.toLowerCase().includes(query);
+          if (!descMatch && !catMatch) return false;
+        }
+        return true;
+      });
+    }
+
+    // Se o usuário filtrou por frequência específica (contínuas, parceladas, à vista) ou por categoria:
+    // Exibe os lançamentos individuais correspondentes a esse critério
+    if (expenseFilter !== 'all' || categoryFilter !== 'all') {
+      return monthExpenses.filter(exp => {
+        if (expenseFilter !== 'all' && exp.frequency_type !== expenseFilter) {
+          return false;
+        }
+        if (categoryFilter !== 'all') {
+          if (categoryFilter === 'none') {
+            if (exp.category_id) return false;
+          } else if (String(exp.category_id) !== String(categoryFilter)) {
+            return false;
+          }
+        }
+        if (cardFilter === 'cards_only' && exp.target_type !== 'card') return false;
+        if (cardFilter === 'accounts_only' && exp.target_type !== 'account') return false;
+        if (searchFilter.trim()) {
+          const query = searchFilter.toLowerCase().trim();
+          const descMatch = exp.description?.toLowerCase().includes(query);
+          const catMatch = exp.category_name?.toLowerCase().includes(query);
+          const cardMatch = exp.credit_card_name?.toLowerCase().includes(query);
+          const accMatch = exp.account_name?.toLowerCase().includes(query);
+          if (!descMatch && !catMatch && !cardMatch && !accMatch) return false;
+        }
+        return true;
+      });
+    }
+
+    // Visão consolidada padrão ("Todas"): exibe o valor consolidado da fatura por cartão + despesas em contas
+    return consolidatedMonthExpenses.filter(exp => {
+      if (cardFilter === 'cards_only' && !exp.is_card_invoice) return false;
+      if (cardFilter === 'accounts_only' && exp.is_card_invoice) return false;
+
       if (searchFilter.trim()) {
         const query = searchFilter.toLowerCase().trim();
-        const descMatch = exp.description?.toLowerCase().includes(query);
-        const catMatch = exp.category_name?.toLowerCase().includes(query);
-        const cardMatch = exp.credit_card_name?.toLowerCase().includes(query);
-        const accMatch = exp.account_name?.toLowerCase().includes(query);
-        if (!descMatch && !catMatch && !cardMatch && !accMatch) {
-          return false;
+        if (exp.is_card_invoice) {
+          const cardMatch = exp.credit_card_name?.toLowerCase().includes(query) || exp.description?.toLowerCase().includes(query);
+          const itemMatch = exp.items.some(it => it.description?.toLowerCase().includes(query) || it.category_name?.toLowerCase().includes(query));
+          if (!cardMatch && !itemMatch) return false;
+        } else {
+          const descMatch = exp.description?.toLowerCase().includes(query);
+          const catMatch = exp.category_name?.toLowerCase().includes(query);
+          const accMatch = exp.account_name?.toLowerCase().includes(query);
+          if (!descMatch && !catMatch && !accMatch) return false;
         }
       }
       return true;
     });
-  }, [monthExpenses, expenseFilter, categoryFilter, cardFilter, searchFilter]);
+  }, [monthExpenses, consolidatedMonthExpenses, expenseFilter, categoryFilter, cardFilter, searchFilter]);
 
   // Total das despesas após aplicação dos filtros
   const filteredTotalCents = useMemo(() => {
@@ -949,6 +1093,43 @@ export default function App() {
       loadData();
     } catch (err) {
       toast.error('Erro ao alternar status');
+    }
+  };
+
+  const handleToggleCardPaid = async (cardId, cardExpenses) => {
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    const now = new Date();
+    const diffMonths = (targetYear - now.getFullYear()) * 12 + (targetMonth - now.getMonth());
+
+    if (diffMonths > 0) {
+      toast.info('Esta fatura é uma projeção futura. O pagamento é controlado no mês de competência.');
+      return;
+    }
+
+    if (!cardExpenses || cardExpenses.length === 0) return;
+
+    // Se todos estiverem pagos, marca como pendente; se houver pendente, marca todos como pagos
+    const allPaid = cardExpenses.every(e => e.is_paid === 1);
+    const nextStatus = !allPaid;
+    const expenseIds = cardExpenses.map(e => e.id);
+
+    try {
+      if (window.api?.toggleExpensesPaid) {
+        await window.api.toggleExpensesPaid(expenseIds, nextStatus);
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          expenses: prev.expenses.map(e => expenseIds.includes(e.id) ? { ...e, is_paid: nextStatus ? 1 : 0 } : e)
+        }));
+      }
+      const card = overview.creditCards.find(c => c.id === cardId);
+      const cardName = card?.name || 'Cartão';
+      toast.success(nextStatus ? `Fatura do cartão ${cardName} marcada como paga!` : `Fatura do cartão ${cardName} marcada como pendente!`);
+      loadData();
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao alternar status da fatura do cartão');
     }
   };
 
@@ -2046,7 +2227,7 @@ export default function App() {
                     {formatBRL(monthTotalCents)}
                   </div>
                   <div className="text-[11px] text-gray-400 mt-1">
-                    {monthExpenses.length} compromisso(s) em {monthLabel.split(' ')[0]}
+                    {consolidatedMonthExpenses.length} compromisso(s) em {monthLabel.split(' ')[0]} ({monthExpenses.length} lançamentos)
                   </div>
                 </div>
 
@@ -2072,7 +2253,7 @@ export default function App() {
                     {formatBRL(totalInstallmentDebtCents)}
                   </div>
                   <div className="text-[11px] text-gray-400 mt-1">
-                    Total a pagar nos próximos ciclos
+                    A pagar a partir de {nextMonthLabel}
                   </div>
                 </div>
               </div>
@@ -2155,6 +2336,16 @@ export default function App() {
                                 </div>
                               </div>
                               <button
+                                onClick={() => {
+                                  setCardFilter(`card:${c.id}`);
+                                  setActiveTab('expenses');
+                                }}
+                                className="text-gray-400 hover:text-purple-400 p-1 rounded hover:bg-white/10 transition-all"
+                                title="Ver compras deste cartão no mês"
+                              >
+                                <ExternalLink size={13} />
+                              </button>
+                              <button
                                 onClick={() => handleOpenEditCard(c)}
                                 className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-emerald-400 p-1 rounded hover:bg-white/10 transition-all"
                                 title="Editar cartão"
@@ -2179,24 +2370,48 @@ export default function App() {
                       onClick={() => setActiveTab('expenses')}
                       className="text-xs text-gray-400 hover:text-white flex items-center gap-0.5"
                     >
-                      Ver todas ({monthExpenses.length}) <ChevronRight size={12} />
+                      Ver todas ({consolidatedMonthExpenses.length}) <ChevronRight size={12} />
                     </button>
                   </div>
                   <div className="space-y-2">
-                    {monthExpenses.length === 0 ? (
+                    {consolidatedMonthExpenses.length === 0 ? (
                       <p className="text-xs text-gray-500 py-6 text-center">
                         Nenhuma despesa ou parcela projetada para {monthLabel}.
                       </p>
                     ) : (
-                      monthExpenses.slice(0, 6).map(exp => (
-                        <div key={exp.id} className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/[0.07] transition-colors">
+                      consolidatedMonthExpenses.slice(0, 6).map(exp => (
+                        <div
+                          key={exp.id}
+                          className={`flex items-center justify-between p-2.5 rounded-lg transition-colors ${
+                            exp.is_card_invoice
+                              ? 'bg-purple-950/20 border border-purple-500/15 hover:bg-purple-950/30'
+                              : 'bg-white/5 hover:bg-white/[0.07]'
+                          }`}
+                        >
                           <div className="flex items-center gap-2.5">
                             <button
-                              onClick={() => handleTogglePaid(exp)}
+                              onClick={() => {
+                                if (exp.is_card_invoice) {
+                                  handleToggleCardPaid(exp.credit_card_id, exp.items);
+                                } else {
+                                  handleTogglePaid(exp);
+                                }
+                              }}
                               className="text-gray-500 hover:text-emerald-400 transition-colors"
+                              title={
+                                exp.is_card_invoice
+                                  ? exp.is_paid
+                                    ? 'Fatura paga (clique para marcar como pendente)'
+                                    : 'Marcar fatura completa como paga'
+                                  : exp.is_paid
+                                  ? 'Marcar como pendente'
+                                  : 'Marcar como paga'
+                              }
                             >
                               {exp.is_paid ? (
                                 <CheckCircle2 size={16} className="text-emerald-400" />
+                              ) : exp.is_partially_paid ? (
+                                <CircleDot size={16} className="text-amber-400" />
                               ) : (
                                 <Circle size={16} />
                               )}
@@ -2204,22 +2419,47 @@ export default function App() {
                             <div>
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-medium text-gray-200">{exp.description}</span>
-                                {exp.frequency_type === 'recurring' && (
+                                {exp.is_card_invoice ? (
+                                  <span className="text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.2 rounded flex items-center gap-0.5">
+                                    <CreditCard size={9} /> Fatura ({exp.items_count} {exp.items_count === 1 ? 'compra' : 'compras'})
+                                  </span>
+                                ) : exp.frequency_type === 'recurring' ? (
                                   <span className="text-[10px] font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1.5 py-0.2 rounded flex items-center gap-0.5">
                                     <Repeat size={10} /> Contínua {exp.due_day ? `(Dia ${exp.due_day})` : ''}
                                   </span>
-                                )}
-                                {exp.frequency_type === 'installment' && (
+                                ) : exp.frequency_type === 'installment' ? (
                                   <span className="text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded">
                                     Parcela {exp.current_installment || 1}/{exp.total_installments || 1}
                                   </span>
-                                )}
+                                ) : null}
                               </div>
                               <div className="text-[10px] text-gray-400 flex items-center gap-1.5 mt-0.5">
-                                <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: exp.category_color || '#6b7280' }} />
-                                <span>{exp.category_name || 'Sem Categoria'}</span>
-                                <span>•</span>
-                                <span>{exp.target_type === 'card' ? (exp.credit_card_name || 'Cartão') : (exp.account_name || 'Conta')}</span>
+                                {exp.is_card_invoice ? (
+                                  <>
+                                    <button
+                                      onClick={() => {
+                                        setCardFilter(`card:${exp.credit_card_id}`);
+                                        setActiveTab('expenses');
+                                      }}
+                                      className="text-purple-400 hover:text-purple-300 hover:underline flex items-center gap-0.5 font-medium"
+                                    >
+                                      Ir até o cartão <ChevronRight size={10} />
+                                    </button>
+                                    {exp.due_day && (
+                                      <>
+                                        <span>•</span>
+                                        <span>Vence dia {exp.due_day}</span>
+                                      </>
+                                    )}
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: exp.category_color || '#6b7280' }} />
+                                    <span>{exp.category_name || 'Sem Categoria'}</span>
+                                    <span>•</span>
+                                    <span>{exp.account_name || 'Conta'}</span>
+                                  </>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -2389,7 +2629,7 @@ export default function App() {
                         : 'text-gray-400 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    Todas ({monthExpenses.length})
+                    Todas ({cardFilter === 'all' && expenseFilter === 'all' && categoryFilter === 'all' ? consolidatedMonthExpenses.length : monthExpenses.length})
                   </button>
                   <button
                     onClick={() => setExpenseFilter('recurring')}
@@ -2513,7 +2753,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <Filter size={13} className="text-emerald-400" />
                       <span>
-                        Exibindo <strong className="text-white">{displayedExpenses.length}</strong> de {monthExpenses.length} lançamentos
+                        Exibindo <strong className="text-white">{displayedExpenses.length}</strong> {cardFilter === 'all' && expenseFilter === 'all' && categoryFilter === 'all' ? 'contas/faturas' : 'lançamentos'} de {monthExpenses.length} no mês
                         • Total filtrado: <strong className="text-rose-400">{formatBRL(filteredTotalCents)}</strong>
                       </span>
                     </div>
@@ -2527,6 +2767,41 @@ export default function App() {
                 )}
               </div>
 
+              {/* Banner contextual quando visualizando compras de um cartão específico */}
+              {cardFilter.startsWith('card:') && (
+                <div className="p-3.5 rounded-xl bg-purple-950/40 border border-purple-500/30 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 text-xs text-purple-200">
+                    <CreditCard size={16} className="text-purple-400" />
+                    <div>
+                      <div className="font-semibold text-white">
+                        Lançamentos da fatura de {overview.creditCards.find(c => String(c.id) === cardFilter.replace('card:', ''))?.name || 'Cartão'}
+                      </div>
+                      <div className="text-[11px] text-purple-300 mt-0.5">
+                        Fatura em {monthLabel.split(' ')[0]}: <strong className="text-rose-400">{formatBRL(filteredTotalCents)}</strong> ({displayedExpenses.length} compras)
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const cardId = parseInt(cardFilter.replace('card:', ''), 10);
+                        handleToggleCardPaid(cardId, displayedExpenses);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-sm"
+                    >
+                      <CheckCircle2 size={13} />
+                      {displayedExpenses.every(e => e.is_paid) ? 'Marcar Fatura como Pendente' : 'Marcar Fatura Inteira como Paga'}
+                    </button>
+                    <button
+                      onClick={() => setCardFilter('all')}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-gray-200 text-xs font-medium transition-colors"
+                    >
+                      Voltar para Todas as Despesas
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Tabela de Despesas */}
               <div className="overflow-hidden rounded-xl bg-dark-800/40 border border-white/5">
                 <table className="w-full text-left border-collapse text-xs">
@@ -2538,7 +2813,7 @@ export default function App() {
                       <th className="p-3">Categoria</th>
                       <th className="p-3">Origem</th>
                       <th className="p-3 text-right">Valor</th>
-                      <th className="p-3 w-28 text-center">Ações</th>
+                      <th className="p-3 w-32 text-center">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -2549,133 +2824,327 @@ export default function App() {
                         </td>
                       </tr>
                     ) : (
-                      displayedExpenses.map(exp => (
-                        <tr
-                          key={exp.id}
-                          className={`hover:bg-white/[0.03] transition-colors ${
-                            exp.is_active === 0 ? 'opacity-40' : ''
-                          }`}
-                        >
-                          <td className="p-3 text-center">
-                            <button
-                              onClick={() => handleTogglePaid(exp)}
-                              disabled={exp.is_active === 0}
-                              className="text-gray-500 hover:text-emerald-400 transition-colors disabled:cursor-not-allowed"
-                              title={
-                                monthOffset !== 0
-                                  ? 'Navegação de projeção (marcação feita no Mês Atual)'
-                                  : exp.is_paid
-                                  ? 'Marcar como pendente'
-                                  : 'Marcar como paga'
-                              }
-                            >
-                              {exp.is_paid ? (
-                                <CheckCircle2 size={16} className="text-emerald-400" />
-                              ) : (
-                                <Circle size={16} />
+                      displayedExpenses.map(exp => {
+                        // Renderização da linha de FATURA CONSOLIDADA DO CARTÃO
+                        if (exp.is_card_invoice) {
+                          const isExpanded = !!expandedCardInvoices[exp.credit_card_id];
+                          return (
+                            <React.Fragment key={exp.id}>
+                              <tr
+                                className={`transition-colors ${
+                                  exp.is_paid ? 'opacity-85' : ''
+                                } bg-purple-950/10 hover:bg-purple-950/20`}
+                              >
+                                <td className="p-3 text-center">
+                                  <button
+                                    onClick={() => handleToggleCardPaid(exp.credit_card_id, exp.items)}
+                                    className="text-gray-500 hover:text-emerald-400 transition-colors"
+                                    title={
+                                      monthOffset !== 0
+                                        ? 'Navegação de projeção (marcação feita no Mês Atual)'
+                                        : exp.is_paid
+                                        ? 'Fatura paga (clique para marcar todas as compras como pendentes)'
+                                        : 'Marcar fatura completa como paga'
+                                    }
+                                  >
+                                    {exp.is_paid ? (
+                                      <CheckCircle2 size={16} className="text-emerald-400" />
+                                    ) : exp.is_partially_paid ? (
+                                      <CircleDot size={16} className="text-amber-400" />
+                                    ) : (
+                                      <Circle size={16} />
+                                    )}
+                                  </button>
+                                </td>
+                                <td className="p-3 font-medium text-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-white">{exp.description}</span>
+                                    <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.2 rounded font-medium">
+                                      Fatura Consolidada
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-gray-400 mt-0.5">
+                                    {exp.items_count} {exp.items_count === 1 ? 'compra na fatura' : 'compras na fatura'}
+                                    {exp.closing_day ? ` • Fecha dia ${exp.closing_day}` : ''}
+                                    {exp.due_day ? ` • Vence dia ${exp.due_day}` : ''}
+                                  </div>
+                                </td>
+                                <td className="p-3">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center gap-1 w-fit">
+                                    <CreditCard size={10} /> Fatura do Mês
+                                  </span>
+                                </td>
+                                <td className="p-3">
+                                  <span
+                                    className="px-2 py-0.5 rounded text-[10px] font-medium"
+                                    style={{
+                                      backgroundColor: '#a855f722',
+                                      color: '#c084fc',
+                                      border: '1px solid #a855f744'
+                                    }}
+                                  >
+                                    Cartão de Crédito
+                                  </span>
+                                </td>
+                                <td className="p-3 text-purple-300 font-medium">
+                                  <span className="flex items-center gap-1.5">
+                                    <CreditCard size={13} className="text-purple-400" />
+                                    {exp.credit_card_name}
+                                  </span>
+                                </td>
+                                <td className={`p-3 text-right font-semibold ${exp.is_paid ? 'text-gray-400 line-through' : 'text-rose-400'}`}>
+                                  {formatBRL(exp.amount_cents)}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    <button
+                                      onClick={() => toggleExpandCardInvoice(exp.credit_card_id)}
+                                      className="px-2 py-1 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded text-[11px] font-medium transition-colors flex items-center gap-1"
+                                      title={isExpanded ? 'Recolher detalhes' : 'Ver compras desta fatura'}
+                                    >
+                                      {isExpanded ? (
+                                        <>
+                                          <ChevronUp size={12} /> Ocultar
+                                        </>
+                                      ) : (
+                                        <>
+                                          <ChevronDown size={12} /> Compras ({exp.items_count})
+                                        </>
+                                      )}
+                                    </button>
+                                    <button
+                                      onClick={() => setCardFilter(`card:${exp.credit_card_id}`)}
+                                      className="p-1 hover:bg-purple-500/20 text-gray-400 hover:text-purple-300 rounded transition-colors"
+                                      title="Ir até o cartão (exibir compras exclusivas)"
+                                    >
+                                      <ExternalLink size={13} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+
+                              {/* Linha expandida com a listagem detalhada de compras da fatura */}
+                              {isExpanded && (
+                                <tr className="bg-purple-950/20 border-b border-purple-500/20">
+                                  <td colSpan="7" className="p-3 pl-8">
+                                    <div className="space-y-2">
+                                      <div className="flex items-center justify-between text-xs text-purple-300 font-medium pb-1.5 border-b border-purple-500/20">
+                                        <div className="flex items-center gap-2">
+                                          <CreditCard size={14} />
+                                          <span>Compras que compõem a fatura de <strong>{exp.credit_card_name}</strong> em {monthLabel.split(' ')[0]}</span>
+                                        </div>
+                                        <button
+                                          onClick={() => setCardFilter(`card:${exp.credit_card_id}`)}
+                                          className="text-[11px] text-purple-300 hover:text-white underline flex items-center gap-1"
+                                        >
+                                          Ir até o cartão <ChevronRight size={11} />
+                                        </button>
+                                      </div>
+                                      <div className="divide-y divide-white/5">
+                                        {exp.items.map(item => (
+                                          <div key={item.id} className="py-2 flex items-center justify-between text-xs">
+                                            <div className="flex items-center gap-3">
+                                              <button
+                                                onClick={() => handleTogglePaid(item)}
+                                                className="text-gray-500 hover:text-emerald-400 transition-colors"
+                                                title={item.is_paid ? 'Marcada como paga' : 'Marcada como pendente'}
+                                              >
+                                                {item.is_paid ? <CheckCircle2 size={14} className="text-emerald-400" /> : <Circle size={14} />}
+                                              </button>
+                                              <div>
+                                                <span className="font-medium text-gray-200">{item.description}</span>
+                                                <div className="flex items-center gap-2 mt-0.5 text-[10px] text-gray-400">
+                                                  <span
+                                                    className="px-1.5 py-0.2 rounded"
+                                                    style={{
+                                                      backgroundColor: (item.category_color || '#6b7280') + '22',
+                                                      color: item.category_color || '#d1d5db'
+                                                    }}
+                                                  >
+                                                    {item.category_name || 'Sem categoria'}
+                                                  </span>
+                                                  {item.frequency_type === 'recurring' && (
+                                                    <span className="text-sky-300">Contínua</span>
+                                                  )}
+                                                  {item.frequency_type === 'installment' && (
+                                                    <span className="text-amber-300">Parcela {item.current_installment}/{item.total_installments}</span>
+                                                  )}
+                                                  {item.frequency_type === 'one_time' && (
+                                                    <span className="text-gray-400">À vista</span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <div className="flex items-center gap-4">
+                                              <span className={`font-semibold ${item.is_paid ? 'text-gray-400 line-through' : 'text-rose-400'}`}>
+                                                {formatBRL(item.amount_cents)}
+                                              </span>
+                                              <div className="flex items-center gap-1">
+                                                {item.frequency_type === 'installment' && (
+                                                  <button
+                                                    onClick={() => handleAdvanceInstallment(item)}
+                                                    className="p-1 hover:bg-amber-500/20 text-gray-400 hover:text-amber-300 rounded"
+                                                    title="Avançar 1 parcela"
+                                                  >
+                                                    +1x
+                                                  </button>
+                                                )}
+                                                <button
+                                                  onClick={() => handleOpenEditExpense(item)}
+                                                  className="p-1 hover:bg-white/10 text-gray-400 hover:text-emerald-400 rounded"
+                                                  title="Editar compra"
+                                                >
+                                                  <Pencil size={13} />
+                                                </button>
+                                                <button
+                                                  onClick={() => handleDeleteExpense(item.id)}
+                                                  className="p-1 hover:bg-rose-500/20 text-gray-400 hover:text-rose-400 rounded"
+                                                  title="Excluir do cartão"
+                                                >
+                                                  <Trash2 size={13} />
+                                                </button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
                               )}
-                            </button>
-                          </td>
-                          <td className="p-3 font-medium text-gray-200">
-                            <div>
-                              <span>{exp.description}</span>
-                              {exp.is_active === 0 && (
-                                <span className="ml-2 text-[10px] text-rose-400 bg-rose-500/10 px-1.5 py-0.2 rounded border border-rose-500/20">
-                                  Pausada / Cancelada
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="p-3">
-                            {exp.frequency_type === 'recurring' && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30 flex items-center gap-1">
-                                  <Repeat size={10} /> Contínua {exp.due_day ? `• Dia ${exp.due_day}` : ''}
-                                </span>
+                            </React.Fragment>
+                          );
+                        }
+
+                        // Renderização padrão de despesa vinculada a conta bancária ou compra individual filtrada
+                        return (
+                          <tr
+                            key={exp.id}
+                            className={`hover:bg-white/[0.03] transition-colors ${
+                              exp.is_active === 0 ? 'opacity-40' : ''
+                            }`}
+                          >
+                            <td className="p-3 text-center">
+                              <button
+                                onClick={() => handleTogglePaid(exp)}
+                                disabled={exp.is_active === 0}
+                                className="text-gray-500 hover:text-emerald-400 transition-colors disabled:cursor-not-allowed"
+                                title={
+                                  monthOffset !== 0
+                                    ? 'Navegação de projeção (marcação feita no Mês Atual)'
+                                    : exp.is_paid
+                                    ? 'Marcar como pendente'
+                                    : 'Marcar como paga'
+                                }
+                              >
+                                {exp.is_paid ? (
+                                  <CheckCircle2 size={16} className="text-emerald-400" />
+                                ) : (
+                                  <Circle size={16} />
+                                )}
+                              </button>
+                            </td>
+                            <td className="p-3 font-medium text-gray-200">
+                              <div>
+                                <span>{exp.description}</span>
+                                {exp.is_active === 0 && (
+                                  <span className="ml-2 text-[10px] text-rose-400 bg-rose-500/10 px-1.5 py-0.2 rounded border border-rose-500/20">
+                                    Pausada / Cancelada
+                                  </span>
+                                )}
                               </div>
-                            )}
-                            {exp.frequency_type === 'installment' && (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                                Parcela {exp.current_installment || 1} de {exp.total_installments || 1}
-                              </span>
-                            )}
-                            {exp.frequency_type === 'one_time' && (
-                              <span className="text-[11px] text-gray-400">À vista / Única</span>
-                            )}
-                          </td>
-                          <td className="p-3">
-                            <span
-                              className="px-2 py-0.5 rounded text-[10px] font-medium"
-                              style={{
-                                backgroundColor: (exp.category_color || '#6b7280') + '22',
-                                color: exp.category_color || '#d1d5db',
-                                border: `1px solid ${(exp.category_color || '#6b7280')}44`
-                              }}
-                            >
-                              {exp.category_name || 'Sem categoria'}
-                            </span>
-                          </td>
-                          <td className="p-3 text-gray-300">
-                            {exp.target_type === 'card' ? (
-                              <span className="flex items-center gap-1.5 text-purple-400">
-                                <CreditCard size={13} /> {exp.credit_card_name || 'Cartão'}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-1.5 text-blue-400">
-                                <Wallet size={13} /> {exp.account_name || 'Conta'}
-                              </span>
-                            )}
-                          </td>
-                          <td className="p-3 text-right font-semibold text-rose-400">
-                            {formatBRL(exp.amount_cents)}
-                          </td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              {/* Avançar parcela */}
-                              {exp.frequency_type === 'installment' && (
-                                <button
-                                  onClick={() => handleAdvanceInstallment(exp)}
-                                  className="p-1 hover:bg-amber-500/20 text-gray-400 hover:text-amber-300 rounded transition-colors"
-                                  title="Avançar 1 parcela"
-                                >
-                                  +1x
-                                </button>
-                              )}
-
-                              {/* Pausar/Reativar assinatura */}
+                            </td>
+                            <td className="p-3">
                               {exp.frequency_type === 'recurring' && (
-                                <button
-                                  onClick={() => handleToggleActive(exp)}
-                                  className={`p-1 rounded transition-colors ${
-                                    exp.is_active === 0
-                                      ? 'hover:bg-emerald-500/20 text-gray-400 hover:text-emerald-300'
-                                      : 'hover:bg-sky-500/20 text-gray-400 hover:text-sky-300'
-                                  }`}
-                                  title={exp.is_active === 0 ? 'Reativar assinatura' : 'Pausar / Cancelar assinatura'}
-                                >
-                                  {exp.is_active === 0 ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
-                                </button>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30 flex items-center gap-1">
+                                    <Repeat size={10} /> Contínua {exp.due_day ? `• Dia ${exp.due_day}` : ''}
+                                  </span>
+                                </div>
                               )}
-
-                              <button
-                                onClick={() => handleOpenEditExpense(exp)}
-                                className="p-1 hover:bg-white/10 text-gray-400 hover:text-emerald-400 rounded transition-colors"
-                                title="Editar despesa"
+                              {exp.frequency_type === 'installment' && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                  Parcela {exp.current_installment || 1} de {exp.total_installments || 1}
+                                </span>
+                              )}
+                              {exp.frequency_type === 'one_time' && (
+                                <span className="text-[11px] text-gray-400">À vista / Única</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <span
+                                className="px-2 py-0.5 rounded text-[10px] font-medium"
+                                style={{
+                                  backgroundColor: (exp.category_color || '#6b7280') + '22',
+                                  color: exp.category_color || '#d1d5db',
+                                  border: `1px solid ${(exp.category_color || '#6b7280')}44`
+                                }}
                               >
-                                <Pencil size={14} />
-                              </button>
+                                {exp.category_name || 'Sem categoria'}
+                              </span>
+                            </td>
+                            <td className="p-3 text-gray-300">
+                              {exp.target_type === 'card' ? (
+                                <span className="flex items-center gap-1.5 text-purple-400">
+                                  <CreditCard size={13} /> {exp.credit_card_name || 'Cartão'}
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1.5 text-blue-400">
+                                  <Wallet size={13} /> {exp.account_name || 'Conta'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right font-semibold text-rose-400">
+                              {formatBRL(exp.amount_cents)}
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                {/* Avançar parcela */}
+                                {exp.frequency_type === 'installment' && (
+                                  <button
+                                    onClick={() => handleAdvanceInstallment(exp)}
+                                    className="p-1 hover:bg-amber-500/20 text-gray-400 hover:text-amber-300 rounded transition-colors"
+                                    title="Avançar 1 parcela"
+                                  >
+                                    +1x
+                                  </button>
+                                )}
 
-                              <button
-                                onClick={() => handleDeleteExpense(exp.id)}
-                                className="p-1 hover:bg-rose-500/20 text-gray-400 hover:text-rose-400 rounded transition-colors"
-                                title="Excluir do histórico"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                                {/* Pausar/Reativar assinatura */}
+                                {exp.frequency_type === 'recurring' && (
+                                  <button
+                                    onClick={() => handleToggleActive(exp)}
+                                    className={`p-1 rounded transition-colors ${
+                                      exp.is_active === 0
+                                        ? 'hover:bg-emerald-500/20 text-gray-400 hover:text-emerald-300'
+                                        : 'hover:bg-sky-500/20 text-gray-400 hover:text-sky-300'
+                                    }`}
+                                    title={exp.is_active === 0 ? 'Reativar assinatura' : 'Pausar / Cancelar assinatura'}
+                                  >
+                                    {exp.is_active === 0 ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => handleOpenEditExpense(exp)}
+                                  className="p-1 hover:bg-white/10 text-gray-400 hover:text-emerald-400 rounded transition-colors"
+                                  title="Editar despesa"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+
+                                <button
+                                  onClick={() => handleDeleteExpense(exp.id)}
+                                  className="p-1 hover:bg-rose-500/20 text-gray-400 hover:text-rose-400 rounded transition-colors"
+                                  title="Excluir do histórico"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -3544,6 +4013,18 @@ export default function App() {
                               </button>
                             </div>
                           </div>
+
+                          <button
+                            onClick={() => {
+                              setCardFilter(`card:${c.id}`);
+                              setActiveTab('expenses');
+                            }}
+                            className="mt-3 w-full py-1.5 px-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 border border-purple-500/20"
+                          >
+                            <CreditCard size={13} />
+                            <span>Ver compras de {monthLabel.split(' ')[0]} ({formatBRL(cardMonthlyTotal)})</span>
+                            <ChevronRight size={12} />
+                          </button>
                         </div>
                       );
                     })

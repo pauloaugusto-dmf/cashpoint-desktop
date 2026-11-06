@@ -31,6 +31,7 @@ function setupIpcHandlers() {
   ipcMain.handle('expenses:add', async (event, expense) => await db.addExpense(expense));
   ipcMain.handle('expenses:update', async (event, id, expense) => await db.updateExpense(id, expense));
   ipcMain.handle('expenses:togglePaid', async (event, id, isPaid) => await db.toggleExpensePaid(id, isPaid));
+  ipcMain.handle('expenses:toggleMultiplePaid', async (event, ids, isPaid) => await db.toggleExpensesPaid(ids, isPaid));
   ipcMain.handle('expenses:toggleActive', async (event, id, isActive) => await db.toggleExpenseActive(id, isActive));
   ipcMain.handle('expenses:delete', async (event, id) => await db.deleteExpense(id));
 

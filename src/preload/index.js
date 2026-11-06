@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   addExpense: (expense) => ipcRenderer.invoke('expenses:add', expense),
   updateExpense: (id, expense) => ipcRenderer.invoke('expenses:update', id, expense),
   toggleExpensePaid: (id, isPaid) => ipcRenderer.invoke('expenses:togglePaid', id, isPaid),
+  toggleExpensesPaid: (ids, isPaid) => ipcRenderer.invoke('expenses:toggleMultiplePaid', ids, isPaid),
   toggleExpenseActive: (id, isActive) => ipcRenderer.invoke('expenses:toggleActive', id, isActive),
   deleteExpense: (id) => ipcRenderer.invoke('expenses:delete', id),
 
