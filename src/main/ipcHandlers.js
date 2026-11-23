@@ -35,6 +35,12 @@ function setupIpcHandlers() {
   ipcMain.handle('expenses:toggleActive', async (event, id, isActive) => await db.toggleExpenseActive(id, isActive));
   ipcMain.handle('expenses:delete', async (event, id) => await db.deleteExpense(id));
 
+  // Planned Items (Desejos & Planos)
+  ipcMain.handle('plannedItems:get', async () => await db.getPlannedItems());
+  ipcMain.handle('plannedItems:add', async (event, item) => await db.addPlannedItem(item));
+  ipcMain.handle('plannedItems:update', async (event, id, item) => await db.updatePlannedItem(id, item));
+  ipcMain.handle('plannedItems:delete', async (event, id) => await db.deletePlannedItem(id));
+
   // Backup & Restore
   ipcMain.handle('data:export', async () => {
     const data = await db.getAllData();

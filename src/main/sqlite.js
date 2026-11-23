@@ -121,6 +121,20 @@ async function initDatabase() {
     }
   }
 
+  // Planned Items (Desejos & Planos)
+  await dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS planned_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      estimated_amount_cents INTEGER NOT NULL CHECK (estimated_amount_cents >= 0),
+      priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('urgent', 'high', 'medium', 'low')),
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    );
+  `);
+
   return dbInstance;
 }
 
@@ -143,8 +157,25 @@ async function getOverview() {
     LEFT JOIN credit_cards cc ON e.credit_card_id = cc.id
     ORDER BY e.created_at DESC;
   `);
+  const plannedItems = await db.all(`
+    SELECT
+      p.*,
+      c.name as category_name,
+      c.color as category_color
+    FROM planned_items p
+    LEFT JOIN categories c ON p.category_id = c.id
+    ORDER BY
+      CASE p.priority
+        WHEN 'urgent' THEN 1
+        WHEN 'high' THEN 2
+        WHEN 'medium' THEN 3
+        WHEN 'low' THEN 4
+        ELSE 5
+      END ASC,
+      p.created_at DESC;
+  `);
 
-  return { accounts, creditCards, categories, expenses };
+  return { accounts, creditCards, categories, expenses, plannedItems };
 }
 
 // Accounts
@@ -363,6 +394,90 @@ async function deleteExpense(id) {
   await db.run('DELETE FROM expenses WHERE id = ?;', [id]);
 }
 
+// Planned Items (Desejos & Planos)
+async function getPlannedItems() {
+  const db = await initDatabase();
+  return await db.all(`
+    SELECT
+      p.*,
+      c.name as category_name,
+      c.color as category_color
+    FROM planned_items p
+    LEFT JOIN categories c ON p.category_id = c.id
+    ORDER BY
+      CASE p.priority
+        WHEN 'urgent' THEN 1
+        WHEN 'high' THEN 2
+        WHEN 'medium' THEN 3
+        WHEN 'low' THEN 4
+        ELSE 5
+      END ASC,
+      p.created_at DESC;
+  `);
+}
+
+async function addPlannedItem(payload) {
+  const db = await initDatabase();
+  const {
+    category_id = null,
+    name,
+    estimated_amount_cents = 0,
+    priority = 'medium',
+    notes = null
+  } = payload;
+
+  const validPriority = ['urgent', 'high', 'medium', 'low'].includes(priority) ? priority : 'medium';
+
+  const res = await db.run(`
+    INSERT INTO planned_items (category_id, name, estimated_amount_cents, priority, notes)
+    VALUES (?, ?, ?, ?, ?);
+  `, [
+    category_id || null,
+    name,
+    Math.max(0, estimated_amount_cents || 0),
+    validPriority,
+    notes || null
+  ]);
+
+  return res.lastID;
+}
+
+async function updatePlannedItem(id, payload) {
+  const db = await initDatabase();
+  const {
+    category_id = null,
+    name,
+    estimated_amount_cents = 0,
+    priority = 'medium',
+    notes = null
+  } = payload;
+
+  const validPriority = ['urgent', 'high', 'medium', 'low'].includes(priority) ? priority : 'medium';
+
+  await db.run(`
+    UPDATE planned_items SET
+      category_id = ?,
+      name = ?,
+      estimated_amount_cents = ?,
+      priority = ?,
+      notes = ?,
+      updated_at = datetime('now', 'localtime')
+    WHERE id = ?;
+  `, [
+    category_id || null,
+    name,
+    Math.max(0, estimated_amount_cents || 0),
+    validPriority,
+    notes || null,
+    id
+  ]);
+}
+
+async function deletePlannedItem(id) {
+  const db = await initDatabase();
+  await db.run('DELETE FROM planned_items WHERE id = ?;', [id]);
+}
+
 // Backup & Restore
 async function getAllData() {
   const db = await initDatabase();
@@ -370,13 +485,15 @@ async function getAllData() {
   const creditCards = await db.all('SELECT * FROM credit_cards;');
   const categories = await db.all('SELECT * FROM categories;');
   const expenses = await db.all('SELECT * FROM expenses;');
-  return { accounts, creditCards, categories, expenses, exportedAt: new Date().toISOString() };
+  const plannedItems = await db.all('SELECT * FROM planned_items;');
+  return { accounts, creditCards, categories, expenses, plannedItems, exportedAt: new Date().toISOString() };
 }
 
 async function importData(data) {
   const db = await initDatabase();
   await db.exec('BEGIN TRANSACTION;');
   try {
+    await db.exec('DELETE FROM planned_items;');
     await db.exec('DELETE FROM expenses;');
     await db.exec('DELETE FROM categories;');
     await db.exec('DELETE FROM credit_cards;');
@@ -404,6 +521,13 @@ async function importData(data) {
       for (const e of data.expenses) {
         await db.run(`INSERT INTO expenses (id, category_id, description, target_type, account_id, credit_card_id, frequency_type, amount_cents, current_installment, total_installments, due_day, is_paid, is_active, competence_month, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           [e.id, e.category_id, e.description, e.target_type, e.account_id, e.credit_card_id, e.frequency_type, e.amount_cents, e.current_installment, e.total_installments, e.due_day, e.is_paid, e.is_active !== undefined ? e.is_active : 1, e.competence_month || null, e.created_at, e.updated_at]);
+      }
+    }
+    if (data.plannedItems?.length) {
+      for (const p of data.plannedItems) {
+        const validPriority = ['urgent', 'high', 'medium', 'low'].includes(p.priority) ? p.priority : 'medium';
+        await db.run(`INSERT INTO planned_items (id, category_id, name, estimated_amount_cents, priority, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+          [p.id, p.category_id || null, p.name, Math.max(0, p.estimated_amount_cents || 0), validPriority, p.notes || null, p.created_at, p.updated_at]);
       }
     }
     await db.exec('COMMIT;');
@@ -436,6 +560,10 @@ module.exports = {
   toggleExpensesPaid,
   toggleExpenseActive,
   deleteExpense,
+  getPlannedItems,
+  addPlannedItem,
+  updatePlannedItem,
+  deletePlannedItem,
   getAllData,
   importData
 };

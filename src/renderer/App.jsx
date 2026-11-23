@@ -41,7 +41,12 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Sparkles,
-  Activity
+  Activity,
+  Target,
+  CheckSquare,
+  AlertTriangle,
+  StickyNote,
+  Flag
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 
@@ -123,6 +128,38 @@ const PRESET_CATEGORY_COLORS = [
   '#6b7280'  // Cinza
 ];
 
+// Configuração de níveis de prioridade para Desejos & Planos
+const PRIORITY_CONFIG = {
+  urgent: {
+    label: 'Urgente / Essencial',
+    shortLabel: 'Urgente',
+    rank: 1,
+    color: '#f43f5e',
+    badgeClass: 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+  },
+  high: {
+    label: 'Alta',
+    shortLabel: 'Alta',
+    rank: 2,
+    color: '#f97316',
+    badgeClass: 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+  },
+  medium: {
+    label: 'Média',
+    shortLabel: 'Média',
+    rank: 3,
+    color: '#eab308',
+    badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+  },
+  low: {
+    label: 'Baixa',
+    shortLabel: 'Baixa',
+    rank: 4,
+    color: '#3b82f6',
+    badgeClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [expenseFilter, setExpenseFilter] = useState('all'); // 'all' | 'recurring' | 'installment' | 'one_time'
@@ -147,12 +184,20 @@ export default function App() {
   const [hoveredAnnualMonth, setHoveredAnnualMonth] = useState(null);
   const [selectedAnnualMonth, setSelectedAnnualMonth] = useState(null);
 
+  // Estados para Desejos & Planos (Simulador de Compras / Projetos)
+  const [selectedPlannedIds, setSelectedPlannedIds] = useState([]);
+  const [plannedPriorityFilter, setPlannedPriorityFilter] = useState('all'); // 'all' | 'urgent' | 'high' | 'medium' | 'low'
+  const [plannedCategoryFilter, setPlannedCategoryFilter] = useState('all'); // 'all' | category_id | 'none'
+  const [plannedSearchFilter, setPlannedSearchFilter] = useState('');
+  const [plannedSort, setPlannedSort] = useState('priority'); // 'priority' | 'amount_desc' | 'amount_asc' | 'name'
+
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState({
     accounts: [],
     creditCards: [],
     categories: [],
-    expenses: []
+    expenses: [],
+    plannedItems: []
   });
 
   // Modais
@@ -160,18 +205,27 @@ export default function App() {
   const [showCardModal, setShowCardModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [showPlannedModal, setShowPlannedModal] = useState(false);
 
   // Estados de Edição
   const [editingAccount, setEditingAccount] = useState(null);
   const [editingCard, setEditingCard] = useState(null);
   const [editingExpense, setEditingExpense] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
-  const [categoryModalReturnToExpense, setCategoryModalReturnToExpense] = useState(false);
+  const [editingPlannedItem, setEditingPlannedItem] = useState(null);
+  const [categoryModalReturnTarget, setCategoryModalReturnTarget] = useState(null); // null | 'expense' | 'planned'
 
   // Forms
   const [accountForm, setAccountForm] = useState({ name: '', balance_reais: '' });
   const [cardForm, setCardForm] = useState({ name: '', limit_reais: '', closing_day: 1, due_day: 10 });
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#10b981' });
+  const [plannedForm, setPlannedForm] = useState({
+    name: '',
+    estimated_amount_reais: '',
+    priority: 'medium',
+    category_id: '',
+    notes: ''
+  });
   const [expenseForm, setExpenseForm] = useState({
     description: '',
     amount_reais: '',
@@ -193,7 +247,13 @@ export default function App() {
     try {
       if (window.api?.getOverview) {
         const data = await window.api.getOverview();
-        setOverview(data);
+        setOverview({
+          accounts: data.accounts || [],
+          creditCards: data.creditCards || [],
+          categories: data.categories || [],
+          expenses: data.expenses || [],
+          plannedItems: data.plannedItems || []
+        });
       } else {
         // Fallback mockup
         const now = new Date();
@@ -229,6 +289,11 @@ export default function App() {
             { id: 2, description: 'Netflix 4K', amount_cents: 5590, frequency_type: 'recurring', due_day: 22, is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Assinaturas & Lazer', category_color: '#8b5cf6', is_paid: 0, competence_month: formatYearMonth(now), created_at: dateStr },
             { id: 3, description: 'Notebook Dell', amount_cents: 45000, frequency_type: 'installment', current_installment: 3, total_installments: 10, is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Eletrônicos', category_color: '#10b981', is_paid: 0, competence_month: formatYearMonth(now), created_at: dateStr },
             { id: 4, description: 'Supermercado Mensal', amount_cents: 65000, frequency_type: 'one_time', is_active: 1, target_type: 'card', credit_card_name: 'Nubank Ultravioleta', category_name: 'Alimentação', category_color: '#f97316', is_paid: 0, competence_month: formatYearMonth(now), created_at: dateStr }
+          ],
+          plannedItems: [
+            { id: 1, name: 'Consertar teto da casa', estimated_amount_cents: 280000, priority: 'urgent', category_id: 3, category_name: 'Moradia & Contas', category_color: '#3b82f6', notes: 'Orçamento médio com material e mão de obra' },
+            { id: 2, name: 'Smart TV 55" 4K', estimated_amount_cents: 320000, priority: 'medium', category_id: 9, category_name: 'Compras & Eletrônicos', category_color: '#6366f1', notes: 'Aguardar promoção ou cashback' },
+            { id: 3, name: 'Colocar forro na sala', estimated_amount_cents: 450000, priority: 'high', category_id: 3, category_name: 'Moradia & Contas', category_color: '#3b82f6', notes: 'Forro de gesso com iluminação embutida' }
           ]
         });
       }
@@ -854,17 +919,17 @@ export default function App() {
   };
 
   // Ações de Categorias
-  const handleOpenAddCategory = (fromExpense = false) => {
+  const handleOpenAddCategory = (fromTarget = null) => {
     setEditingCategory(null);
     setCategoryForm({ name: '', color: '#10b981' });
-    setCategoryModalReturnToExpense(fromExpense);
+    setCategoryModalReturnTarget(fromTarget === true ? 'expense' : fromTarget);
     setShowCategoryModal(true);
   };
 
   const handleOpenEditCategory = (cat) => {
     setEditingCategory(cat);
     setCategoryForm({ name: cat.name, color: cat.color || '#6b7280' });
-    setCategoryModalReturnToExpense(false);
+    setCategoryModalReturnTarget(null);
     setShowCategoryModal(true);
   };
 
@@ -901,12 +966,15 @@ export default function App() {
         }
         toast.success('Categoria criada com sucesso');
 
-        if (categoryModalReturnToExpense && createdId) {
+        if (categoryModalReturnTarget === 'expense' && createdId) {
           setExpenseForm(prev => ({ ...prev, category_id: String(createdId) }));
+        } else if (categoryModalReturnTarget === 'planned' && createdId) {
+          setPlannedForm(prev => ({ ...prev, category_id: String(createdId) }));
         }
       }
       setShowCategoryModal(false);
       setEditingCategory(null);
+      setCategoryModalReturnTarget(null);
       setCategoryForm({ name: '', color: '#10b981' });
       await loadData();
     } catch (err) {
@@ -915,7 +983,7 @@ export default function App() {
   };
 
   const handleDeleteCategory = async (cat) => {
-    if (!confirm(`Deseja realmente remover a categoria "${cat.name}"? As despesas associadas a ela passarão a ficar sem categoria.`)) return;
+    if (!confirm(`Deseja realmente remover a categoria "${cat.name}"? As despesas e itens planejados associados a ela passarão a ficar sem categoria.`)) return;
     try {
       if (window.api?.deleteCategory) {
         await window.api.deleteCategory(cat.id);
@@ -929,6 +997,244 @@ export default function App() {
       await loadData();
     } catch (err) {
       toast.error('Erro ao remover categoria');
+    }
+  };
+
+  // --- DESEJOS & PLANOS (Cálculos, Filtros e Ações) ---
+  const plannedItemsList = useMemo(() => overview.plannedItems || [], [overview.plannedItems]);
+
+  const filteredPlannedItems = useMemo(() => {
+    const query = plannedSearchFilter.trim().toLowerCase();
+    const list = plannedItemsList.filter(item => {
+      if (plannedPriorityFilter !== 'all' && item.priority !== plannedPriorityFilter) {
+        return false;
+      }
+      if (plannedCategoryFilter !== 'all') {
+        if (plannedCategoryFilter === 'none') {
+          if (item.category_id) return false;
+        } else if (String(item.category_id) !== String(plannedCategoryFilter)) {
+          return false;
+        }
+      }
+      if (query) {
+        const nameMatch = item.name?.toLowerCase().includes(query);
+        const notesMatch = item.notes?.toLowerCase().includes(query);
+        const catMatch = item.category_name?.toLowerCase().includes(query);
+        if (!nameMatch && !notesMatch && !catMatch) return false;
+      }
+      return true;
+    });
+
+    return [...list].sort((a, b) => {
+      if (plannedSort === 'priority') {
+        const rankA = PRIORITY_CONFIG[a.priority]?.rank ?? 99;
+        const rankB = PRIORITY_CONFIG[b.priority]?.rank ?? 99;
+        if (rankA !== rankB) return rankA - rankB;
+        return (b.estimated_amount_cents || 0) - (a.estimated_amount_cents || 0);
+      }
+      if (plannedSort === 'amount_desc') {
+        return (b.estimated_amount_cents || 0) - (a.estimated_amount_cents || 0);
+      }
+      if (plannedSort === 'amount_asc') {
+        return (a.estimated_amount_cents || 0) - (b.estimated_amount_cents || 0);
+      }
+      if (plannedSort === 'name') {
+        return (a.name || '').localeCompare(b.name || '', 'pt-BR');
+      }
+      return 0;
+    });
+  }, [plannedItemsList, plannedPriorityFilter, plannedCategoryFilter, plannedSearchFilter, plannedSort]);
+
+  const selectedPlannedSet = useMemo(() => new Set(selectedPlannedIds), [selectedPlannedIds]);
+
+  const selectedPlannedItems = useMemo(() => {
+    return plannedItemsList.filter(item => selectedPlannedSet.has(item.id));
+  }, [plannedItemsList, selectedPlannedSet]);
+
+  const selectedPlannedTotalCents = useMemo(() => {
+    return selectedPlannedItems.reduce((sum, item) => sum + (item.estimated_amount_cents || 0), 0);
+  }, [selectedPlannedItems]);
+
+  const allPlannedTotalCents = useMemo(() => {
+    return plannedItemsList.reduce((sum, item) => sum + (item.estimated_amount_cents || 0), 0);
+  }, [plannedItemsList]);
+
+  const hasActivePlannedFilters =
+    plannedPriorityFilter !== 'all' ||
+    plannedCategoryFilter !== 'all' ||
+    plannedSearchFilter.trim() !== '';
+
+  // Simulação de Impacto Financeiro em Tempo Real
+  const planningImpact = useMemo(() => {
+    const freeMonthBeforeCents = totalBalanceCents - monthPendingCents;
+    const freeMonthAfterCents = freeMonthBeforeCents - selectedPlannedTotalCents;
+
+    const totalDebtBeforeCents = monthPendingCents + totalInstallmentDebtCents;
+    const totalDebtAfterCents = totalDebtBeforeCents + selectedPlannedTotalCents;
+
+    const generalBalanceBeforeCents = totalBalanceCents - totalDebtBeforeCents;
+    const generalBalanceAfterCents = totalBalanceCents - totalDebtAfterCents;
+
+    const monthDeficitCents = freeMonthAfterCents < 0 ? Math.abs(freeMonthAfterCents) : 0;
+    const generalDeficitCents = generalBalanceAfterCents < 0 ? Math.abs(generalBalanceAfterCents) : 0;
+
+    const baseBalance = totalBalanceCents > 0 ? totalBalanceCents : 1;
+    const pendingSharePercent = Math.min(100, Math.max(0, Math.round((monthPendingCents / baseBalance) * 1000) / 10));
+    const selectedSharePercent = Math.min(
+      Math.max(0, 100 - pendingSharePercent),
+      Math.max(0, Math.round((selectedPlannedTotalCents / baseBalance) * 1000) / 10)
+    );
+    const totalCommittedMonthPercent = totalBalanceCents > 0
+      ? Math.round(((monthPendingCents + selectedPlannedTotalCents) / totalBalanceCents) * 1000) / 10
+      : (monthPendingCents + selectedPlannedTotalCents > 0 ? 100 : 0);
+
+    return {
+      freeMonthBeforeCents,
+      freeMonthAfterCents,
+      totalDebtBeforeCents,
+      totalDebtAfterCents,
+      generalBalanceBeforeCents,
+      generalBalanceAfterCents,
+      monthDeficitCents,
+      generalDeficitCents,
+      pendingSharePercent,
+      selectedSharePercent,
+      totalCommittedMonthPercent
+    };
+  }, [totalBalanceCents, monthPendingCents, totalInstallmentDebtCents, selectedPlannedTotalCents]);
+
+  const handleTogglePlannedSelection = (id) => {
+    setSelectedPlannedIds(prev => (
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    ));
+  };
+
+  const handleSelectAllFilteredPlanned = () => {
+    const visibleIds = filteredPlannedItems.map(item => item.id);
+    setSelectedPlannedIds(prev => Array.from(new Set([...prev, ...visibleIds])));
+  };
+
+  const handleClearPlannedSelection = () => {
+    setSelectedPlannedIds([]);
+  };
+
+  const handleClearPlannedFilters = () => {
+    setPlannedPriorityFilter('all');
+    setPlannedCategoryFilter('all');
+    setPlannedSearchFilter('');
+  };
+
+  const handleOpenAddPlannedItem = () => {
+    setEditingPlannedItem(null);
+    setPlannedForm({
+      name: '',
+      estimated_amount_reais: '',
+      priority: 'medium',
+      category_id: '',
+      notes: ''
+    });
+    setShowPlannedModal(true);
+  };
+
+  const handleOpenEditPlannedItem = (item) => {
+    setEditingPlannedItem(item);
+    const reais = ((item.estimated_amount_cents || 0) / 100).toFixed(2).replace('.', ',');
+    setPlannedForm({
+      name: item.name || '',
+      estimated_amount_reais: reais,
+      priority: item.priority || 'medium',
+      category_id: item.category_id ? String(item.category_id) : '',
+      notes: item.notes || ''
+    });
+    setShowPlannedModal(true);
+  };
+
+  const handleSavePlannedItem = async (e) => {
+    e.preventDefault();
+    if (!plannedForm.name?.trim()) return;
+
+    const estimated_amount_cents = Math.max(0, parseBRLInputToCents(plannedForm.estimated_amount_reais));
+    const categoryId = plannedForm.category_id ? parseInt(plannedForm.category_id, 10) : null;
+    const cat = overview.categories.find(c => c.id === categoryId);
+
+    const payload = {
+      name: plannedForm.name.trim(),
+      estimated_amount_cents,
+      priority: plannedForm.priority || 'medium',
+      category_id: categoryId,
+      notes: plannedForm.notes?.trim() || null
+    };
+
+    try {
+      if (editingPlannedItem) {
+        if (window.api?.updatePlannedItem) {
+          await window.api.updatePlannedItem(editingPlannedItem.id, payload);
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            plannedItems: (prev.plannedItems || []).map(item =>
+              item.id === editingPlannedItem.id
+                ? {
+                    ...item,
+                    ...payload,
+                    category_name: cat?.name || null,
+                    category_color: cat?.color || null
+                  }
+                : item
+            )
+          }));
+        }
+        toast.success('Item atualizado com sucesso');
+      } else {
+        if (window.api?.addPlannedItem) {
+          await window.api.addPlannedItem(payload);
+        } else {
+          setOverview(prev => ({
+            ...prev,
+            plannedItems: [
+              {
+                id: Date.now(),
+                ...payload,
+                category_name: cat?.name || null,
+                category_color: cat?.color || null
+              },
+              ...(prev.plannedItems || [])
+            ]
+          }));
+        }
+        toast.success('Item cadastrado na lista de desejos');
+      }
+      setShowPlannedModal(false);
+      setEditingPlannedItem(null);
+      setPlannedForm({
+        name: '',
+        estimated_amount_reais: '',
+        priority: 'medium',
+        category_id: '',
+        notes: ''
+      });
+      await loadData();
+    } catch (err) {
+      toast.error('Erro ao salvar item');
+    }
+  };
+
+  const handleDeletePlannedItem = async (item) => {
+    if (!confirm(`Deseja realmente remover "${item.name}" da sua lista?`)) return;
+    try {
+      if (window.api?.deletePlannedItem) {
+        await window.api.deletePlannedItem(item.id);
+      } else {
+        setOverview(prev => ({
+          ...prev,
+          plannedItems: (prev.plannedItems || []).filter(p => p.id !== item.id)
+        }));
+      }
+      setSelectedPlannedIds(prev => prev.filter(id => id !== item.id));
+      toast.success('Item removido');
+      await loadData();
+    } catch (err) {
+      toast.error('Erro ao remover item');
     }
   };
 
@@ -1935,6 +2241,25 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('planning')}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'planning'
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+              }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <Target size={17} />
+                <span>Desejos & Planos</span>
+              </span>
+              {selectedPlannedIds.length > 0 && (
+                <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  {selectedPlannedIds.length}
+                </span>
+              )}
+            </button>
+
+            <button
               onClick={() => setActiveTab('accounts')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === 'accounts'
@@ -1976,6 +2301,7 @@ export default function App() {
                 {activeTab === 'expenses' && 'Despesas & Faturas'}
                 {activeTab === 'reports' && 'Gráficos & Análises Financeiras'}
                 {activeTab === 'annual' && 'Variação Anual de Contas'}
+                {activeTab === 'planning' && 'Desejos & Planos'}
                 {activeTab === 'accounts' && 'Minhas Contas, Cartões & Categorias'}
               </h1>
               <p className="text-xs text-gray-400 mt-0.5">
@@ -1983,18 +2309,29 @@ export default function App() {
                 {activeTab === 'expenses' && `Lançamentos, assinaturas e parcelas vigentes em ${monthLabel}.`}
                 {activeTab === 'reports' && `Visão analítica por categorias, faturas de cartões e tabelas de ${monthLabel}.`}
                 {activeTab === 'annual' && 'Evolução e projeção do valor total das contas ao longo de 1 ano (12 meses).'}
+                {activeTab === 'planning' && `Cadastre compras ou projetos futuros e simule o impacto no seu financeiro em ${monthLabel}.`}
                 {activeTab === 'accounts' && 'Gerencie limites, dias de vencimento, saldos e categorias personalizadas.'}
               </p>
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleOpenAddExpense}
-                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors shadow-lg shadow-emerald-950/40"
-              >
-                <Plus size={15} />
-                <span>Nova Despesa</span>
-              </button>
+              {activeTab === 'planning' ? (
+                <button
+                  onClick={handleOpenAddPlannedItem}
+                  className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors shadow-lg shadow-emerald-950/40"
+                >
+                  <Plus size={15} />
+                  <span>Novo Item</span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleOpenAddExpense}
+                  className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors shadow-lg shadow-emerald-950/40"
+                >
+                  <Plus size={15} />
+                  <span>Nova Despesa</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -3907,6 +4244,490 @@ export default function App() {
             </div>
           )}
 
+          {/* VIEW: DESEJOS & PLANOS (SIMULADOR FINANCEIRO) */}
+          {activeTab === 'planning' && (
+            <div className="space-y-6">
+              {/* Cards de Métricas do Simulador */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-xl bg-dark-800/60 border border-white/5">
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Saldo em Contas</span>
+                    <Wallet size={16} className="text-emerald-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-white tracking-tight">
+                    {formatBRL(totalBalanceCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    Pendente em {monthLabel.split(' ')[0]}: <span className="text-amber-400 font-medium">{formatBRL(monthPendingCents)}</span>
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-xl border transition-colors ${
+                  selectedPlannedItems.length > 0
+                    ? 'bg-emerald-500/10 border-emerald-500/30'
+                    : 'bg-dark-800/60 border-white/5'
+                }`}>
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Simulação Selecionada</span>
+                    <Target size={16} className="text-emerald-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-emerald-400 tracking-tight">
+                    {formatBRL(selectedPlannedTotalCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    {selectedPlannedItems.length} de {plannedItemsList.length} item(ns) marcado(s)
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-xl border transition-colors ${
+                  planningImpact.freeMonthAfterCents < 0
+                    ? 'bg-rose-500/10 border-rose-500/30'
+                    : 'bg-dark-800/60 border-white/5'
+                }`}>
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Saldo Livre no Mês</span>
+                    {planningImpact.freeMonthAfterCents < 0 ? (
+                      <AlertTriangle size={16} className="text-rose-400" />
+                    ) : (
+                      <ShieldCheck size={16} className="text-emerald-400" />
+                    )}
+                  </div>
+                  <div className={`text-2xl font-bold tracking-tight ${
+                    planningImpact.freeMonthAfterCents < 0 ? 'text-rose-400' : 'text-emerald-400'
+                  }`}>
+                    {formatBRL(planningImpact.freeMonthAfterCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    {selectedPlannedItems.length > 0 ? (
+                      <>
+                        Antes: <span className="text-gray-300">{formatBRL(planningImpact.freeMonthBeforeCents)}</span>
+                      </>
+                    ) : (
+                      'Saldo em contas menos pendente do mês'
+                    )}
+                  </div>
+                </div>
+
+                <div className={`p-4 rounded-xl border transition-colors ${
+                  planningImpact.generalBalanceAfterCents < 0
+                    ? 'bg-rose-500/10 border-rose-500/30'
+                    : 'bg-dark-800/60 border-white/5'
+                }`}>
+                  <div className="flex items-center justify-between text-gray-400 mb-2">
+                    <span className="text-xs font-medium uppercase tracking-wider">Saldo Geral (c/ Dívida Futura)</span>
+                    <Layers size={16} className={planningImpact.generalBalanceAfterCents < 0 ? 'text-rose-400' : 'text-purple-400'} />
+                  </div>
+                  <div className={`text-2xl font-bold tracking-tight ${
+                    planningImpact.generalBalanceAfterCents < 0 ? 'text-rose-400' : 'text-white'
+                  }`}>
+                    {formatBRL(planningImpact.generalBalanceAfterCents)}
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    Dívida total: <span className="text-purple-300 font-medium">{formatBRL(planningImpact.totalDebtAfterCents)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Painel de Impacto Detalhado (Antes vs. Depois) */}
+              {selectedPlannedItems.length > 0 ? (
+                <div className={`p-5 rounded-xl border space-y-4 ${
+                  planningImpact.freeMonthAfterCents < 0
+                    ? 'bg-rose-500/[0.07] border-rose-500/25'
+                    : planningImpact.generalBalanceAfterCents < 0
+                      ? 'bg-amber-500/[0.07] border-amber-500/25'
+                      : 'bg-emerald-500/[0.07] border-emerald-500/25'
+                }`}>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className={`p-2 rounded-lg shrink-0 ${
+                        planningImpact.freeMonthAfterCents < 0
+                          ? 'bg-rose-500/20 text-rose-400'
+                          : planningImpact.generalBalanceAfterCents < 0
+                            ? 'bg-amber-500/20 text-amber-400'
+                            : 'bg-emerald-500/20 text-emerald-400'
+                      }`}>
+                        {planningImpact.freeMonthAfterCents < 0 ? (
+                          <AlertTriangle size={18} />
+                        ) : planningImpact.generalBalanceAfterCents < 0 ? (
+                          <AlertCircle size={18} />
+                        ) : (
+                          <ShieldCheck size={18} />
+                        )}
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-semibold text-white">
+                          {planningImpact.freeMonthAfterCents < 0
+                            ? `Você ficaria no vermelho em ${formatBRL(planningImpact.monthDeficitCents)} no mês`
+                            : planningImpact.generalBalanceAfterCents < 0
+                              ? `Cabe no saldo de ${monthLabel.split(' ')[0]}, mas o saldo geral fica negativo em ${formatBRL(planningImpact.generalDeficitCents)}`
+                              : `Cabe no seu orçamento! Ainda sobram ${formatBRL(planningImpact.freeMonthAfterCents)} no mês`}
+                        </h2>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          Simulando {selectedPlannedItems.length} item(ns) somando{' '}
+                          <span className="text-white font-semibold">{formatBRL(selectedPlannedTotalCents)}</span>{' '}
+                          sobre o cenário financeiro de {monthLabel}.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleClearPlannedSelection}
+                      className="self-start md:self-center flex items-center gap-1.5 text-xs text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1.5 rounded-lg transition-colors shrink-0"
+                    >
+                      <RotateCcw size={13} />
+                      <span>Limpar seleção</span>
+                    </button>
+                  </div>
+
+                  {/* Barra Visual de Comprometimento do Saldo em Contas */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-gray-400">
+                      <span>Comprometimento do Saldo em Contas ({monthLabel.split(' ')[0]} + Selecionados)</span>
+                      <span className={`font-semibold ${
+                        planningImpact.totalCommittedMonthPercent > 100
+                          ? 'text-rose-400'
+                          : planningImpact.totalCommittedMonthPercent > 80
+                            ? 'text-amber-400'
+                            : 'text-emerald-400'
+                      }`}>
+                        {planningImpact.totalCommittedMonthPercent}% do saldo
+                      </span>
+                    </div>
+                    <div className="h-2.5 w-full rounded-full bg-dark-900/90 border border-white/5 overflow-hidden flex">
+                      <div
+                        className="h-full bg-amber-400/80 transition-all duration-300"
+                        style={{ width: `${planningImpact.pendingSharePercent}%` }}
+                        title={`Pendente no mês: ${formatBRL(monthPendingCents)}`}
+                      />
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          planningImpact.freeMonthAfterCents < 0 ? 'bg-rose-500' : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${planningImpact.selectedSharePercent}%` }}
+                        title={`Itens selecionados: ${formatBRL(selectedPlannedTotalCents)}`}
+                      />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4 text-[10px] text-gray-400 pt-0.5">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400/80" />
+                        Pendente no mês ({formatBRL(monthPendingCents)})
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${planningImpact.freeMonthAfterCents < 0 ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+                        Selecionados ({formatBRL(selectedPlannedTotalCents)})
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-dark-900 border border-white/20" />
+                        Livre restante ({formatBRL(Math.max(0, planningImpact.freeMonthAfterCents))})
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Comparativo Antes vs. Depois */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div className="p-3 rounded-lg bg-dark-900/60 border border-white/5 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider text-gray-400 block">Saldo Livre do Mês</span>
+                        <div className="flex items-center gap-2 mt-1 text-xs">
+                          <span className="text-gray-400">{formatBRL(planningImpact.freeMonthBeforeCents)}</span>
+                          <span className="text-gray-500">→</span>
+                          <span className={`font-bold text-sm ${planningImpact.freeMonthAfterCents < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {formatBRL(planningImpact.freeMonthAfterCents)}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-xs font-semibold text-rose-400">
+                        -{formatBRL(selectedPlannedTotalCents)}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-dark-900/60 border border-white/5 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider text-gray-400 block">
+                          Dívida Total (Mês + Parcelas Futuras)
+                        </span>
+                        <div className="flex items-center gap-2 mt-1 text-xs">
+                          <span className="text-gray-400">{formatBRL(planningImpact.totalDebtBeforeCents)}</span>
+                          <span className="text-gray-500">→</span>
+                          <span className="font-bold text-sm text-purple-300">
+                            {formatBRL(planningImpact.totalDebtAfterCents)}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-xs font-semibold text-purple-400">
+                        +{formatBRL(selectedPlannedTotalCents)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Pílulas dos Itens Selecionados */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    {selectedPlannedItems.map(item => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handleTogglePlannedSelection(item.id)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] bg-white/10 hover:bg-white/15 text-gray-200 border border-white/10 transition-colors"
+                        title="Clique para remover da simulação"
+                      >
+                        <span className="font-medium">{item.name}</span>
+                        <span className="text-emerald-300 font-semibold">{formatBRL(item.estimated_amount_cents)}</span>
+                        <X size={11} className="text-gray-400" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-dark-800/40 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 shrink-0">
+                      <Sparkles size={16} />
+                    </div>
+                    <p className="text-xs text-gray-300">
+                      Marque um ou mais itens na lista abaixo para simular como eles afetam seu{' '}
+                      <span className="text-white font-medium">Saldo Livre em {monthLabel}</span> e sua{' '}
+                      <span className="text-white font-medium">Dívida Total</span>.
+                    </p>
+                  </div>
+                  <div className="text-[11px] text-gray-400 shrink-0">
+                    Total da lista: <span className="text-white font-semibold">{formatBRL(allPlannedTotalCents)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Barra de Filtros, Ordenação e Seleção */}
+              <div className="p-3.5 rounded-xl bg-dark-800/40 border border-white/5 space-y-3">
+                <div className="flex flex-col lg:flex-row gap-2.5">
+                  {/* Busca */}
+                  <div className="relative flex-1">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      value={plannedSearchFilter}
+                      onChange={e => setPlannedSearchFilter(e.target.value)}
+                      placeholder="Buscar por item, observação ou categoria..."
+                      className="w-full bg-dark-900/80 border border-white/10 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Filtro de Prioridade */}
+                  <select
+                    value={plannedPriorityFilter}
+                    onChange={e => setPlannedPriorityFilter(e.target.value)}
+                    className="bg-dark-900/80 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="all">Todas as Prioridades</option>
+                    <option value="urgent">Urgente / Essencial</option>
+                    <option value="high">Alta</option>
+                    <option value="medium">Média</option>
+                    <option value="low">Baixa</option>
+                  </select>
+
+                  {/* Filtro de Categoria */}
+                  <select
+                    value={plannedCategoryFilter}
+                    onChange={e => setPlannedCategoryFilter(e.target.value)}
+                    className="bg-dark-900/80 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="all">Todas as Categorias</option>
+                    <option value="none">Sem Categoria</option>
+                    {overview.categories.map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+
+                  {/* Ordenação */}
+                  <select
+                    value={plannedSort}
+                    onChange={e => setPlannedSort(e.target.value)}
+                    className="bg-dark-900/80 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="priority">Ordenar: Prioridade</option>
+                    <option value="amount_desc">Ordenar: Maior Valor</option>
+                    <option value="amount_asc">Ordenar: Menor Valor</option>
+                    <option value="name">Ordenar: Nome (A-Z)</option>
+                  </select>
+                </div>
+
+                {/* Ações Rápidas da Lista */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/5">
+                  <div className="text-[11px] text-gray-400">
+                    Exibindo <span className="text-white font-semibold">{filteredPlannedItems.length}</span> de{' '}
+                    <span className="text-white font-semibold">{plannedItemsList.length}</span> item(ns)
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {filteredPlannedItems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleSelectAllFilteredPlanned}
+                        className="flex items-center gap-1.5 text-[11px] text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/20 px-2.5 py-1 rounded-md transition-colors"
+                      >
+                        <CheckSquare size={12} />
+                        <span>Selecionar visíveis</span>
+                      </button>
+                    )}
+
+                    {selectedPlannedIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearPlannedSelection}
+                        className="flex items-center gap-1.5 text-[11px] text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 px-2.5 py-1 rounded-md transition-colors"
+                      >
+                        <RotateCcw size={12} />
+                        <span>Limpar seleção ({selectedPlannedIds.length})</span>
+                      </button>
+                    )}
+
+                    {hasActivePlannedFilters && (
+                      <button
+                        type="button"
+                        onClick={handleClearPlannedFilters}
+                        className="flex items-center gap-1.5 text-[11px] text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 px-2.5 py-1 rounded-md transition-colors"
+                      >
+                        <X size={12} />
+                        <span>Limpar filtros</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Lista de Itens Planejados */}
+              {plannedItemsList.length === 0 ? (
+                <div className="p-10 rounded-xl bg-dark-800/40 border border-white/5 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto text-emerald-400">
+                    <Target size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">Nenhum desejo ou plano cadastrado</h3>
+                    <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">
+                      Cadastre compras ou projetos futuros (como uma TV, consertar o teto ou colocar forro) para organizar por prioridade e simular o impacto no seu financeiro.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleOpenAddPlannedItem}
+                    className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
+                  >
+                    <Plus size={14} />
+                    <span>Cadastrar Primeiro Item</span>
+                  </button>
+                </div>
+              ) : filteredPlannedItems.length === 0 ? (
+                <div className="p-8 rounded-xl bg-dark-800/40 border border-white/5 text-center space-y-2">
+                  <p className="text-xs text-gray-400">Nenhum item encontrado com os filtros aplicados.</p>
+                  <button
+                    onClick={handleClearPlannedFilters}
+                    className="text-xs text-emerald-400 hover:underline"
+                  >
+                    Limpar filtros
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {filteredPlannedItems.map(item => {
+                    const isSelected = selectedPlannedSet.has(item.id);
+                    const priorityMeta = PRIORITY_CONFIG[item.priority] || PRIORITY_CONFIG.medium;
+
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => handleTogglePlannedSelection(item.id)}
+                        className={`group cursor-pointer p-4 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                          isSelected
+                            ? 'bg-emerald-500/10 border-emerald-500/40 shadow-lg shadow-emerald-950/20'
+                            : 'bg-dark-800/50 border-white/5 hover:border-white/15 hover:bg-dark-800/80'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3.5 min-w-0">
+                          <div className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                            isSelected
+                              ? 'bg-emerald-500 border-emerald-400 text-dark-950'
+                              : 'bg-dark-900/70 border-white/20 text-transparent group-hover:border-emerald-500/50'
+                          }`}>
+                            <CheckCircle2 size={14} className={isSelected ? 'text-white' : 'opacity-0'} />
+                          </div>
+
+                          <div className="min-w-0 space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-white truncate">
+                                {item.name}
+                              </span>
+
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${priorityMeta.badgeClass}`}>
+                                <Flag size={10} />
+                                {priorityMeta.label}
+                              </span>
+
+                              {item.category_name && (
+                                <span
+                                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium"
+                                  style={{
+                                    backgroundColor: (item.category_color || '#6b7280') + '22',
+                                    color: item.category_color || '#d1d5db',
+                                    border: `1px solid ${(item.category_color || '#6b7280')}44`
+                                  }}
+                                >
+                                  <span
+                                    className="w-1.5 h-1.5 rounded-full"
+                                    style={{ backgroundColor: item.category_color || '#6b7280' }}
+                                  />
+                                  {item.category_name}
+                                </span>
+                              )}
+                            </div>
+
+                            {item.notes && (
+                              <p className="text-xs text-gray-400 flex items-start gap-1.5 break-words">
+                                <StickyNote size={12} className="text-gray-500 shrink-0 mt-0.5" />
+                                <span>{item.notes}</span>
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between sm:justify-end gap-3 pl-8 sm:pl-0 shrink-0">
+                          <div className="text-right">
+                            <div className={`text-base font-bold tracking-tight ${
+                              isSelected ? 'text-emerald-300' : 'text-white'
+                            }`}>
+                              {formatBRL(item.estimated_amount_cents)}
+                            </div>
+                            <div className="text-[10px] text-gray-400">
+                              {isSelected ? 'Incluído na simulação' : 'Valor médio estimado'}
+                            </div>
+                          </div>
+
+                          <div
+                            className="flex items-center gap-1"
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditPlannedItem(item)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-400 hover:bg-white/10 transition-colors"
+                              title="Editar item"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePlannedItem(item)}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                              title="Remover item"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* VIEW: CONTAS & CARTÕES */}
           {activeTab === 'accounts' && (
             <div className="space-y-8">
@@ -4623,6 +5444,130 @@ export default function App() {
                 className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
               >
                 {editingExpense ? 'Salvar Alterações' : 'Salvar Despesa'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: ITEM PLANEJADO (NOVO OU EDITAR) */}
+      {showPlannedModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <form onSubmit={handleSavePlannedItem} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <h3 className="text-sm font-semibold text-white">
+                {editingPlannedItem ? 'Editar Item Planejado' : 'Novo Desejo / Plano'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPlannedModal(false);
+                  setEditingPlannedItem(null);
+                }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Nome / Descrição</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: Smart TV 55'', Consertar teto, Colocar forro..."
+                value={plannedForm.name}
+                onChange={e => setPlannedForm({ ...plannedForm, name: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Valor Médio Estimado (R$)</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: 2500,00"
+                value={plannedForm.estimated_amount_reais}
+                onChange={e => setPlannedForm({ ...plannedForm, estimated_amount_reais: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1.5">Prioridade / Importância</label>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(PRIORITY_CONFIG).map(([key, cfg]) => {
+                  const active = plannedForm.priority === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setPlannedForm({ ...plannedForm, priority: key })}
+                      className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-all ${
+                        active
+                          ? cfg.badgeClass + ' ring-1 ring-white/20'
+                          : 'bg-dark-900/70 border-white/10 text-gray-400 hover:text-gray-200 hover:border-white/20'
+                      }`}
+                    >
+                      <Flag size={12} />
+                      <span>{cfg.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] text-gray-400">Categoria</label>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAddCategory('planned')}
+                  className="text-[11px] text-emerald-400 hover:underline flex items-center gap-0.5"
+                >
+                  <Plus size={11} /> Nova categoria
+                </button>
+              </div>
+              <select
+                value={plannedForm.category_id}
+                onChange={e => setPlannedForm({ ...plannedForm, category_id: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              >
+                <option value="">Sem categoria</option>
+                {overview.categories.map(cat => (
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Observações (opcional)</label>
+              <textarea
+                rows={3}
+                placeholder="Ex: Detalhes do orçamento, loja, link de referência..."
+                value={plannedForm.notes}
+                onChange={e => setPlannedForm({ ...plannedForm, notes: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPlannedModal(false);
+                  setEditingPlannedItem(null);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-white/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+              >
+                {editingPlannedItem ? 'Salvar Alterações' : 'Cadastrar Item'}
               </button>
             </div>
           </form>

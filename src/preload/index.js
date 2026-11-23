@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('api', {
   toggleExpenseActive: (id, isActive) => ipcRenderer.invoke('expenses:toggleActive', id, isActive),
   deleteExpense: (id) => ipcRenderer.invoke('expenses:delete', id),
 
+  // Planned Items (Desejos & Planos)
+  getPlannedItems: () => ipcRenderer.invoke('plannedItems:get'),
+  addPlannedItem: (item) => ipcRenderer.invoke('plannedItems:add', item),
+  updatePlannedItem: (id, item) => ipcRenderer.invoke('plannedItems:update', id, item),
+  deletePlannedItem: (id) => ipcRenderer.invoke('plannedItems:delete', id),
+
   // Backup & Restore
   exportData: () => ipcRenderer.invoke('data:export'),
   importData: () => ipcRenderer.invoke('data:import'),
