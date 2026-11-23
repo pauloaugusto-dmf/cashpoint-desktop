@@ -1,6 +1,6 @@
 {
   "name": "cashpoint-desktop",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "Gerenciador financeiro pessoal para desktop",
   "main": "src/main/main.js",
   "scripts": {

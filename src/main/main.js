@@ -39,15 +39,15 @@ function createWindow() {
     },
   });
 
-  // Configura idiomas do corretor ortográfico (Português Brasil + Inglês)
+  // Configura idioma do corretor ortográfico apenas para Português (Brasil)
   try {
     const available = mainWindow.webContents.session.availableSpellCheckerLanguages || [];
-    const desired = ['pt-BR', 'en-US'].filter(lang => available.includes(lang));
-    if (desired.length > 0) {
-      mainWindow.webContents.session.setSpellCheckerLanguages(desired);
+    const ptLang = available.includes('pt-BR') ? 'pt-BR' : available.find(lang => lang.startsWith('pt'));
+    if (ptLang) {
+      mainWindow.webContents.session.setSpellCheckerLanguages([ptLang]);
     }
   } catch (err) {
-    console.warn('[Cashpoint] Não foi possível configurar idiomas do corretor:', err.message);
+    console.warn('[Cashpoint] Não foi possível configurar idioma do corretor:', err.message);
   }
 
   // Menu de contexto (botão direito) com sugestões de ortografia e edição de texto
