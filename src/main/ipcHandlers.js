@@ -3,6 +3,7 @@ const { ipcMain, dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const db = require('./sqlite');
+const { generateAiFinancialReport } = require('./aiReportGenerator');
 
 function setupIpcHandlers() {
   // Overview
@@ -56,6 +57,23 @@ function setupIpcHandlers() {
       return true;
     }
     return false;
+  });
+
+  ipcMain.handle('data:exportAiReport', async (event, options = {}) => {
+    const overview = await db.getOverview();
+    const markdown = generateAiFinancialReport(overview, options);
+    const dateStr = new Date().toISOString().split('T')[0];
+    const { filePath } = await dialog.showSaveDialog({
+      title: 'Exportar Relatório Financeiro para IA',
+      defaultPath: `cashpoint-analise-${dateStr}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    });
+
+    if (filePath) {
+      fs.writeFileSync(filePath, markdown, 'utf-8');
+      return { saved: true, filePath };
+    }
+    return { saved: false };
   });
 
   ipcMain.handle('data:import', async () => {

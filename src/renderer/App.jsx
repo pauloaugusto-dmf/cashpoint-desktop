@@ -206,6 +206,28 @@ export default function App() {
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [showPlannedModal, setShowPlannedModal] = useState(false);
+  const [showAiExportModal, setShowAiExportModal] = useState(false);
+  const [exportingAiReport, setExportingAiReport] = useState(false);
+  const [aiExportForm, setAiExportForm] = useState(() => {
+    try {
+      const saved = localStorage.getItem('cashpoint_ai_export_context');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          monthly_income_reais: parsed.monthly_income_reais || '',
+          main_goal: parsed.main_goal || '',
+          notes: parsed.notes || ''
+        };
+      }
+    } catch {
+      // ignora erro de localStorage
+    }
+    return {
+      monthly_income_reais: '',
+      main_goal: '',
+      notes: ''
+    };
+  });
 
   // Estados de Edição
   const [editingAccount, setEditingAccount] = useState(null);
@@ -1529,6 +1551,49 @@ export default function App() {
     }
   };
 
+  // Exportação para IA (.md)
+  const handleOpenAiExportModal = () => {
+    setShowAiExportModal(true);
+  };
+
+  const handleExportAiReport = async (e) => {
+    e.preventDefault();
+    setExportingAiReport(true);
+    try {
+      try {
+        localStorage.setItem('cashpoint_ai_export_context', JSON.stringify(aiExportForm));
+      } catch {
+        // ignora erro de localStorage
+      }
+
+      const incomeCents = aiExportForm.monthly_income_reais?.trim()
+        ? parseBRLInputToCents(aiExportForm.monthly_income_reais)
+        : null;
+
+      const options = {
+        monthlyIncomeCents: incomeCents && incomeCents > 0 ? incomeCents : null,
+        mainGoal: aiExportForm.main_goal?.trim() || '',
+        notes: aiExportForm.notes?.trim() || '',
+        referenceMonth: formatYearMonth(targetDate)
+      };
+
+      if (window.api?.exportAiReport) {
+        const result = await window.api.exportAiReport(options);
+        if (result?.saved) {
+          toast.success('Relatório para IA exportado com sucesso!');
+          setShowAiExportModal(false);
+        }
+      } else {
+        toast.info('Exportação disponível no aplicativo desktop (Electron)');
+      }
+    } catch (err) {
+      console.error('Erro ao exportar relatório para IA:', err);
+      toast.error('Erro ao gerar relatório para IA');
+    } finally {
+      setExportingAiReport(false);
+    }
+  };
+
   // Cálculo da linha do tempo e variação de contas ao longo de 1 ano (12 meses)
   const annualTimeline = useMemo(() => {
     const now = new Date();
@@ -2274,6 +2339,13 @@ export default function App() {
 
           {/* Backup e Ações Rápidas */}
           <div className="pt-3 border-t border-white/5 space-y-1">
+            <button
+              onClick={handleOpenAiExportModal}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/20 rounded-md transition-colors mb-1.5"
+            >
+              <Sparkles size={14} />
+              <span>Exportar para IA (.md)</span>
+            </button>
             <button
               onClick={handleExportBackup}
               className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-white/5 rounded-md transition-colors"
@@ -5677,6 +5749,108 @@ export default function App() {
                 className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
               >
                 {editingCategory ? 'Salvar Categoria' : 'Criar Categoria'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: EXPORTAR RELATÓRIO PARA IA (.MD) */}
+      {showAiExportModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <form onSubmit={handleExportAiReport} className="bg-dark-800 border border-white/10 rounded-xl p-5 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-emerald-400" />
+                <h3 className="text-sm font-semibold text-white">
+                  Exportar Relatório para IA (.md)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAiExportModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Gera um arquivo Markdown autocontido com resumo pré-calculado de <span className="text-gray-200 font-medium">{monthLabel}</span>, uso de cartões, projeção dos próximos 12 meses, desejos &amp; planos e todo o histórico de lançamentos.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 bg-dark-900/70 border border-white/5 rounded-lg p-2.5 text-[11px]">
+              <div className="text-gray-400">
+                Contas: <span className="text-gray-200 font-medium">{overview.accounts.length}</span>
+              </div>
+              <div className="text-gray-400">
+                Cartões: <span className="text-gray-200 font-medium">{overview.creditCards.length}</span>
+              </div>
+              <div className="text-gray-400">
+                Lançamentos: <span className="text-gray-200 font-medium">{overview.expenses.length}</span>
+              </div>
+              <div className="text-gray-400">
+                Desejos &amp; Planos: <span className="text-gray-200 font-medium">{overview.plannedItems.length}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">
+                Renda Mensal Líquida (R$) <span className="text-gray-500">(opcional)</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: 8500,00"
+                value={aiExportForm.monthly_income_reais}
+                onChange={e => setAiExportForm({ ...aiExportForm, monthly_income_reais: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              />
+              <span className="text-[10px] text-gray-500 mt-1 block">
+                Se preenchida, calcula automaticamente % comprometida da renda, sobra mensal e tempo estimado para realizar seus planos.
+              </span>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">
+                Objetivo Financeiro Atual <span className="text-gray-500">(opcional)</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Montar reserva de 6 meses e quitar cartão X"
+                value={aiExportForm.main_goal}
+                onChange={e => setAiExportForm({ ...aiExportForm, main_goal: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">
+                Observações / Contexto para a IA <span className="text-gray-500">(opcional)</span>
+              </label>
+              <textarea
+                rows={3}
+                placeholder="Ex: Recebo 13º em dezembro, quero reduzir gastos com delivery, estou planejando viajar em julho..."
+                value={aiExportForm.notes}
+                onChange={e => setAiExportForm({ ...aiExportForm, notes: e.target.value })}
+                className="w-full bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => setShowAiExportModal(false)}
+                className="px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:bg-white/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={exportingAiReport}
+                className="px-4 py-1.5 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium flex items-center gap-1.5"
+              >
+                <Download size={13} />
+                <span>{exportingAiReport ? 'Gerando...' : 'Exportar Arquivo (.md)'}</span>
               </button>
             </div>
           </form>

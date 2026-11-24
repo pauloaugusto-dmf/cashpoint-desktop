@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
   // Backup & Restore
   exportData: () => ipcRenderer.invoke('data:export'),
   importData: () => ipcRenderer.invoke('data:import'),
+  exportAiReport: (options) => ipcRenderer.invoke('data:exportAiReport', options),
 });
 
 contextBridge.exposeInMainWorld('windowControls', {
